@@ -1,0 +1,37 @@
+id = "herdr-router"
+name = "herdr-router"
+version = "0.1.0"
+min_herdr_version = "0.9.0"
+platforms = ["macos", "linux"]
+description = "Route a task to an agent, model, and effort by difficulty x duration, then launch it."
+
+# Interactive picker: type a task, see the classification and the chosen
+# agent, adjust, dispatch into a split beside the focused pane.
+[[panes]]
+id = "popup"
+title = "herdr-router"
+placement = "popup"
+width = 96
+height = 24
+command = ["bin/herdr-router", "popup"]
+
+[[actions]]
+id = "route"
+title = "Route a task to an agent"
+description = "Open the router popup for the focused pane."
+contexts = ["global", "workspace", "pane"]
+command = ["bin/herdr-router", "action", "route"]
+
+[[actions]]
+id = "route-selection"
+title = "Route selected text as a task"
+description = "Use the terminal selection as the task and open the router popup."
+contexts = ["selection"]
+command = ["bin/herdr-router", "action", "route-selection"]
+
+[[actions]]
+id = "open-editor"
+title = "Edit agent coordinates (web)"
+description = "Start the local policy editor if needed and open it in the browser."
+contexts = ["global", "workspace", "pane"]
+command = ["bin/herdr-router", "action", "open-editor"]

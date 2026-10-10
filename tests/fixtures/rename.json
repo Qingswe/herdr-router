@@ -1,0 +1,80 @@
+{
+ "task": "把这个变量重命名",
+ "response": {
+  "model": "jev-1.13-free",
+  "answers": {
+   "task_type": {
+    "type": "choice",
+    "choice": "refactor",
+    "confidence": 1,
+    "probabilities": {
+     "implement": 0,
+     "bugfix": 0,
+     "refactor": 1,
+     "review": 0,
+     "research": 0,
+     "ui": 0,
+     "test": 0,
+     "docs": 0
+    }
+   },
+   "difficulty": {
+    "type": "score",
+    "score": 0.38,
+    "confidence": 0.69,
+    "legend": {
+     "0": "Trivial: a one-line or purely mechanical change",
+     "1": "Easy: small, well-understood change in one place",
+     "2": "Moderate: needs some understanding of the surrounding code",
+     "3": "Hard: subtle logic, several interacting parts, or unclear root cause",
+     "4": "Expert: architecture, concurrency, security, or deep domain reasoning"
+    },
+    "probabilities": {
+     "0": 0.73,
+     "1": 0.17,
+     "2": 0.1,
+     "3": 0,
+     "4": 0
+    }
+   },
+   "duration": {
+    "type": "score",
+    "score": 0.01,
+    "confidence": 0.99,
+    "legend": {
+     "0": "Under 5 minutes",
+     "1": "5 to 30 minutes",
+     "2": "30 to 120 minutes",
+     "3": "Several hours or more"
+    },
+    "probabilities": {
+     "0": 0.99,
+     "1": 0.01,
+     "2": 0,
+     "3": 0
+    }
+   },
+   "scope": {
+    "type": "score",
+    "score": 0.44,
+    "confidence": 0.56,
+    "legend": {
+     "0": "One spot in one file",
+     "1": "One file or one small component",
+     "2": "Several related files",
+     "3": "Many files across the codebase"
+    },
+    "probabilities": {
+     "0": 0.67,
+     "1": 0.24,
+     "2": 0.07,
+     "3": 0.02
+    }
+   }
+  },
+  "usage": {
+   "input_tokens": 707,
+   "output_tokens": 117
+  }
+ }
+}

@@ -1,0 +1,80 @@
+{
+ "task": "把项目里所有 Unity 场景的 Canvas 缩放模式统一改成 Scale With Screen Size",
+ "response": {
+  "model": "jev-1.13-free",
+  "answers": {
+   "task_type": {
+    "type": "choice",
+    "choice": "refactor",
+    "confidence": 0.45,
+    "probabilities": {
+     "implement": 0,
+     "bugfix": 0,
+     "refactor": 0.52,
+     "review": 0,
+     "research": 0,
+     "ui": 0.48,
+     "test": 0,
+     "docs": 0
+    }
+   },
+   "difficulty": {
+    "type": "score",
+    "score": 1.34,
+    "confidence": 0.53,
+    "legend": {
+     "0": "Trivial: a one-line or purely mechanical change",
+     "1": "Easy: small, well-understood change in one place",
+     "2": "Moderate: needs some understanding of the surrounding code",
+     "3": "Hard: subtle logic, several interacting parts, or unclear root cause",
+     "4": "Expert: architecture, concurrency, security, or deep domain reasoning"
+    },
+    "probabilities": {
+     "0": 0.11,
+     "1": 0.46,
+     "2": 0.41,
+     "3": 0.02,
+     "4": 0
+    }
+   },
+   "duration": {
+    "type": "score",
+    "score": 1.47,
+    "confidence": 0.33,
+    "legend": {
+     "0": "Under 5 minutes",
+     "1": "5 to 30 minutes",
+     "2": "30 to 120 minutes",
+     "3": "Several hours or more"
+    },
+    "probabilities": {
+     "0": 0.1,
+     "1": 0.4,
+     "2": 0.43,
+     "3": 0.07
+    }
+   },
+   "scope": {
+    "type": "score",
+    "score": 2.89,
+    "confidence": 0.9,
+    "legend": {
+     "0": "One spot in one file",
+     "1": "One file or one small component",
+     "2": "Several related files",
+     "3": "Many files across the codebase"
+    },
+    "probabilities": {
+     "0": 0,
+     "1": 0,
+     "2": 0.1,
+     "3": 0.9
+    }
+   }
+  },
+  "usage": {
+   "input_tokens": 726,
+   "output_tokens": 117
+  }
+ }
+}

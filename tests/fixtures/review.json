@@ -1,0 +1,80 @@
+{
+ "task": "review 一下当前的 diff",
+ "response": {
+  "model": "jev-1.13-free",
+  "answers": {
+   "task_type": {
+    "type": "choice",
+    "choice": "review",
+    "confidence": 1,
+    "probabilities": {
+     "implement": 0,
+     "bugfix": 0,
+     "refactor": 0,
+     "review": 1,
+     "research": 0,
+     "ui": 0,
+     "test": 0,
+     "docs": 0
+    }
+   },
+   "difficulty": {
+    "type": "score",
+    "score": 1.14,
+    "confidence": 0.28,
+    "legend": {
+     "0": "Trivial: a one-line or purely mechanical change",
+     "1": "Easy: small, well-understood change in one place",
+     "2": "Moderate: needs some understanding of the surrounding code",
+     "3": "Hard: subtle logic, several interacting parts, or unclear root cause",
+     "4": "Expert: architecture, concurrency, security, or deep domain reasoning"
+    },
+    "probabilities": {
+     "0": 0.32,
+     "1": 0.22,
+     "2": 0.45,
+     "3": 0.01,
+     "4": 0
+    }
+   },
+   "duration": {
+    "type": "score",
+    "score": 0.3,
+    "confidence": 0.7,
+    "legend": {
+     "0": "Under 5 minutes",
+     "1": "5 to 30 minutes",
+     "2": "30 to 120 minutes",
+     "3": "Several hours or more"
+    },
+    "probabilities": {
+     "0": 0.72,
+     "1": 0.26,
+     "2": 0.02,
+     "3": 0
+    }
+   },
+   "scope": {
+    "type": "score",
+    "score": 1.2,
+    "confidence": 0.34,
+    "legend": {
+     "0": "One spot in one file",
+     "1": "One file or one small component",
+     "2": "Several related files",
+     "3": "Many files across the codebase"
+    },
+    "probabilities": {
+     "0": 0.23,
+     "1": 0.43,
+     "2": 0.25,
+     "3": 0.09
+    }
+   }
+  },
+  "usage": {
+   "input_tokens": 707,
+   "output_tokens": 116
+  }
+ }
+}

@@ -1,0 +1,80 @@
+{
+ "task": "解释一下 FizzySteamworks 的 relay 是怎么工作的",
+ "response": {
+  "model": "jev-1.13-free",
+  "answers": {
+   "task_type": {
+    "type": "choice",
+    "choice": "research",
+    "confidence": 0.99,
+    "probabilities": {
+     "implement": 0,
+     "bugfix": 0,
+     "refactor": 0,
+     "review": 0,
+     "research": 0.99,
+     "ui": 0,
+     "test": 0,
+     "docs": 0.01
+    }
+   },
+   "difficulty": {
+    "type": "score",
+    "score": 2.54,
+    "confidence": 0.2,
+    "legend": {
+     "0": "Trivial: a one-line or purely mechanical change",
+     "1": "Easy: small, well-understood change in one place",
+     "2": "Moderate: needs some understanding of the surrounding code",
+     "3": "Hard: subtle logic, several interacting parts, or unclear root cause",
+     "4": "Expert: architecture, concurrency, security, or deep domain reasoning"
+    },
+    "probabilities": {
+     "0": 0.07,
+     "1": 0.07,
+     "2": 0.39,
+     "3": 0.19,
+     "4": 0.28
+    }
+   },
+   "duration": {
+    "type": "score",
+    "score": 0.9,
+    "confidence": 0.45,
+    "legend": {
+     "0": "Under 5 minutes",
+     "1": "5 to 30 minutes",
+     "2": "30 to 120 minutes",
+     "3": "Several hours or more"
+    },
+    "probabilities": {
+     "0": 0.33,
+     "1": 0.48,
+     "2": 0.16,
+     "3": 0.03
+    }
+   },
+   "scope": {
+    "type": "score",
+    "score": 1.6,
+    "confidence": 0.41,
+    "legend": {
+     "0": "One spot in one file",
+     "1": "One file or one small component",
+     "2": "Several related files",
+     "3": "Many files across the codebase"
+    },
+    "probabilities": {
+     "0": 0.03,
+     "1": 0.43,
+     "2": 0.44,
+     "3": 0.1
+    }
+   }
+  },
+  "usage": {
+   "input_tokens": 719,
+   "output_tokens": 116
+  }
+ }
+}

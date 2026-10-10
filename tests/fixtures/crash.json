@@ -1,0 +1,80 @@
+{
+ "task": "修复登录偶现的崩溃，原因不明",
+ "response": {
+  "model": "jev-1.13-free",
+  "answers": {
+   "task_type": {
+    "type": "choice",
+    "choice": "bugfix",
+    "confidence": 1,
+    "probabilities": {
+     "implement": 0,
+     "bugfix": 1,
+     "refactor": 0,
+     "review": 0,
+     "research": 0,
+     "ui": 0,
+     "test": 0,
+     "docs": 0
+    }
+   },
+   "difficulty": {
+    "type": "score",
+    "score": 3,
+    "confidence": 0.99,
+    "legend": {
+     "0": "Trivial: a one-line or purely mechanical change",
+     "1": "Easy: small, well-understood change in one place",
+     "2": "Moderate: needs some understanding of the surrounding code",
+     "3": "Hard: subtle logic, several interacting parts, or unclear root cause",
+     "4": "Expert: architecture, concurrency, security, or deep domain reasoning"
+    },
+    "probabilities": {
+     "0": 0,
+     "1": 0,
+     "2": 0,
+     "3": 0.99,
+     "4": 0.01
+    }
+   },
+   "duration": {
+    "type": "score",
+    "score": 2.74,
+    "confidence": 0.74,
+    "legend": {
+     "0": "Under 5 minutes",
+     "1": "5 to 30 minutes",
+     "2": "30 to 120 minutes",
+     "3": "Several hours or more"
+    },
+    "probabilities": {
+     "0": 0,
+     "1": 0.02,
+     "2": 0.22,
+     "3": 0.76
+    }
+   },
+   "scope": {
+    "type": "score",
+    "score": 0.97,
+    "confidence": 0.64,
+    "legend": {
+     "0": "One spot in one file",
+     "1": "One file or one small component",
+     "2": "Several related files",
+     "3": "Many files across the codebase"
+    },
+    "probabilities": {
+     "0": 0.19,
+     "1": 0.66,
+     "2": 0.13,
+     "3": 0.02
+    }
+   }
+  },
+  "usage": {
+   "input_tokens": 715,
+   "output_tokens": 117
+  }
+ }
+}

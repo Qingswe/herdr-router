@@ -1,0 +1,214 @@
+{
+  "version": 2,
+  "backend": {
+    "enabled": true,
+    "base_url": "https://opencode.ai/zen",
+    "model": "jev-1.13-free",
+    "api_key_env": "OPENCODE_API_KEY",
+    "timeout_s": 5.0,
+    "include_repo_signals": false
+  },
+  "scoring": {
+    "under_penalty": 3.0,
+    "over_penalty": 1.0,
+    "cost_weight": 0.05,
+    "min_confidence": 0.35
+  },
+  "dimensions": [
+    {
+      "id": "difficulty",
+      "label": "难度",
+      "type": "score",
+      "weight": 1.0,
+      "instructions": "How hard is this task for a capable coding agent?",
+      "levels": [
+        "Trivial: a one-line or purely mechanical change",
+        "Easy: small, well-understood change in one place",
+        "Moderate: needs some understanding of the surrounding code",
+        "Hard: subtle logic, several interacting parts, or unclear root cause",
+        "Expert: architecture, concurrency, security, or deep domain reasoning"
+      ]
+    },
+    {
+      "id": "duration",
+      "label": "时长",
+      "type": "score",
+      "weight": 1.0,
+      "instructions": "How long will a coding agent need to finish this task?",
+      "levels": [
+        "Under 5 minutes",
+        "5 to 30 minutes",
+        "30 to 120 minutes",
+        "Several hours or more"
+      ]
+    },
+    {
+      "id": "scope",
+      "label": "范围",
+      "type": "score",
+      "weight": 0.5,
+      "instructions": "How much of the codebase does this task touch?",
+      "levels": [
+        "One spot in one file",
+        "One file or one small component",
+        "Several related files",
+        "Many files across the codebase"
+      ]
+    },
+    {
+      "id": "task_type",
+      "label": "类型",
+      "type": "choice",
+      "weight": 2.0,
+      "instructions": "What kind of software task is this?",
+      "options": {
+        "implement": "Build a new feature or add new behaviour to code",
+        "bugfix": "Find and fix a bug, crash, error, or regression",
+        "refactor": "Mechanical restructuring: rename, migrate, reformat, bulk edits across files",
+        "review": "Review existing code or a diff and report problems",
+        "research": "Explain, investigate, or answer a question without changing code",
+        "ui": "User interface, layout, styling, or front-end components",
+        "test": "Write or fix automated tests",
+        "docs": "Write or update documentation, comments, or changelogs"
+      }
+    }
+  ],
+  "profiles": [
+    {
+      "id": "haiku-low",
+      "label": "Haiku 快速",
+      "kind": "claude",
+      "model": "haiku",
+      "effort": "low",
+      "cost": 1,
+      "enabled": true,
+      "ranges": { "difficulty": [0, 1], "duration": [0, 1], "scope": [0, 2] },
+      "affinity": { "task_type": { "review": 0.5 } }
+    },
+    {
+      "id": "kimi-low",
+      "label": "Kimi 快速（备用）",
+      "kind": "kimi",
+      "effort": "low",
+      "cost": 1.2,
+      "enabled": true,
+      "ranges": { "difficulty": [0, 1], "duration": [0, 1], "scope": [0, 2] },
+      "affinity": { "task_type": { "review": 0.5 } }
+    },
+    {
+      "id": "opencode-default",
+      "label": "OpenCode（备用）",
+      "kind": "opencode",
+      "cost": 1.5,
+      "enabled": true,
+      "ranges": { "difficulty": [0, 1], "duration": [0, 1], "scope": [0, 2] },
+      "affinity": { "task_type": { "review": 0.5 } }
+    },
+    {
+      "id": "codex-medium",
+      "label": "Codex 批量",
+      "kind": "codex",
+      "effort": "medium",
+      "cost": 2,
+      "enabled": true,
+      "ranges": { "difficulty": [0, 1], "duration": [1, 3], "scope": [1, 3] },
+      "affinity": { "task_type": { "review": 0.5 } }
+    },
+    {
+      "id": "droid-default",
+      "label": "Droid 批量（备用）",
+      "kind": "droid",
+      "cost": 2.2,
+      "enabled": true,
+      "ranges": { "difficulty": [0, 1], "duration": [1, 3], "scope": [1, 3] },
+      "affinity": { "task_type": { "review": 0.5 } }
+    },
+    {
+      "id": "sonnet-bulk",
+      "label": "Sonnet 批量（备用）",
+      "kind": "claude",
+      "model": "sonnet",
+      "effort": "medium",
+      "cost": 2.5,
+      "enabled": true,
+      "ranges": { "difficulty": [0, 1], "duration": [1, 3], "scope": [1, 3] },
+      "affinity": { "task_type": { "review": 0.5 } }
+    },
+    {
+      "id": "opus-high",
+      "label": "Opus 攻坚",
+      "kind": "claude",
+      "model": "opus",
+      "effort": "high",
+      "cost": 4,
+      "enabled": true,
+      "ranges": { "difficulty": [2, 4], "duration": [0, 1], "scope": [0, 3] },
+      "affinity": { "task_type": { "review": 0.5, "research": 0.5 } }
+    },
+    {
+      "id": "opus-xhigh",
+      "label": "Opus 深度",
+      "kind": "claude",
+      "model": "opus",
+      "effort": "xhigh",
+      "cost": 5,
+      "enabled": true,
+      "prompt_prefix": "这是一个高难度、耗时较长的任务。请先给出简短的执行计划（关键步骤与风险），再按计划执行。\n\n",
+      "ranges": { "difficulty": [2, 4], "duration": [2, 3], "scope": [0, 3] },
+      "affinity": { "task_type": { "review": 0.5 } }
+    },
+    {
+      "id": "codex-review",
+      "label": "Codex 交叉审查",
+      "kind": "codex",
+      "effort": "high",
+      "cost": 3,
+      "enabled": true,
+      "ranges": { "difficulty": [0, 4], "duration": [0, 3], "scope": [0, 3] },
+      "affinity": { "task_type": { "*": 0, "review": 1 } }
+    },
+    {
+      "id": "sonnet-research",
+      "label": "Sonnet 调研",
+      "kind": "claude",
+      "model": "sonnet",
+      "effort": "medium",
+      "cost": 2.5,
+      "enabled": true,
+      "ranges": { "difficulty": [0, 4], "duration": [0, 1], "scope": [0, 3] },
+      "affinity": { "task_type": { "*": 0, "research": 1 } }
+    },
+    {
+      "id": "cursor-ui",
+      "label": "Cursor 界面",
+      "kind": "cursor",
+      "cost": 2,
+      "enabled": true,
+      "ranges": { "difficulty": [0, 1], "duration": [0, 2], "scope": [0, 2] },
+      "affinity": { "task_type": { "*": 0, "ui": 1 } }
+    }
+  ],
+  "aliases": {
+    "@opus": "opus-high",
+    "@deep": "opus-xhigh",
+    "@sonnet": "sonnet-research",
+    "@haiku": "haiku-low",
+    "@codex": "codex-medium",
+    "@review": "codex-review",
+    "@kimi": "kimi-low",
+    "@cursor": "cursor-ui",
+    "@droid": "droid-default",
+    "@opencode": "opencode-default",
+    "!quick": { "difficulty": 0, "duration": 0 },
+    "!easy": { "difficulty": 0 },
+    "!hard": { "difficulty": 3 },
+    "!deep": { "difficulty": 4 },
+    "!long": { "duration": 3 },
+    "!short": { "duration": 0 }
+  },
+  "binaries": { "cursor": "cursor-agent" },
+  "dispatch": { "agent_start_timeout_ms": 60000, "direction": "auto" },
+  "env": {
+    "extra_path": ["~/.local/bin", "/opt/homebrew/bin", "/usr/local/bin", "~/.opencode/bin", "~/.cargo/bin"]
+  }
+}
