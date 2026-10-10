@@ -133,6 +133,7 @@ def run_action(action_id: str) -> int:
 
 
 POPUP_IDLE_S = 300
+POPUP_DONE_S = 1.2
 
 
 def _ask(prompt: str) -> str:
@@ -217,9 +218,11 @@ def run_popup(policy: dict) -> int:
                      direction=dcfg.get("direction", "auto"),
                      start_timeout_ms=int(dcfg.get("agent_start_timeout_ms", 60000)))
         print(f"\n✓ 已派发给 {r.agent}（pane {r.pane_id}）")
+        time.sleep(POPUP_DONE_S)  # the new pane is the result; no need to hold focus here
+        return 0
     except herdr.HerdrError as e:
         print(f"\n✗ 派发失败：{e}")
-    _ask("\n按回车关闭")
+    _ask("\n按回车关闭")  # only on failure: leave the error on screen
     return 0
 
 

@@ -76,7 +76,7 @@ Saving validates the policy on the server, keeps the last 10 versions in `policy
 Security: every API call needs the token. It is stored in the state dir; the first visit trades the `?token=` link for an HttpOnly cookie. Requests whose `Host` header is an unknown domain are refused, which defends against DNS rebinding. The editor can change launch arguments but **cannot dispatch agents**.
 
 Plugin actions:
-- `herdr-router.route` opens a popup. Type a task, review the ranking, then press Enter to dispatch. Use `k`/`m`/`e` to change the profile, model, or effort.
+- `herdr-router.route` opens a popup. Type a task, review the ranking, then press Enter to dispatch; the popup closes by itself about a second after a successful dispatch (a failure stays on screen until you press Enter). Use `k`/`m`/`e` to change the profile, model, or effort.
 - `herdr-router.route-selection` does the same with the terminal selection as the task.
 - `herdr-router.open-editor` starts the editor in the background if needed and opens it in the browser.
 
