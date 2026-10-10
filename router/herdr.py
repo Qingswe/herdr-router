@@ -14,6 +14,8 @@ class HerdrError(Exception):
         super().__init__(f"{code}: {message}")
         self.code = code
         self.message = message
+        self.pane_id: str | None = None  # set by dispatch when the pane it opened is still alive
+        self.agent: str | None = None
 
 
 def herdr_bin() -> str:
@@ -55,6 +57,15 @@ def auto_direction(pane_id: str) -> str:
             rect = p["rect"]
             return "right" if rect["width"] >= 2.2 * rect["height"] else "down"
     return "right"
+
+
+def pane_screen(pane_id: str, lines: int = 12) -> str:
+    """Last non-empty lines on a pane, for showing why an agent never became ready."""
+    try:
+        r = subprocess.run([herdr_bin(), "pane", "read", pane_id], capture_output=True, text=True, timeout=5)
+    except (HerdrError, OSError, subprocess.TimeoutExpired):
+        return ""
+    return "\n".join([ln.rstrip() for ln in r.stdout.splitlines() if ln.strip()][-lines:])
 
 
 def split(target: str, direction: str, cwd: str) -> str:

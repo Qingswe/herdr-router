@@ -34,6 +34,7 @@ def dispatch(decision: Decision, *, target_pane: str | None, cwd: str,
         # agent_not_ready = blocked at startup (e.g. a trust dialog). The pane
         # and name stay live; the caller must look before prompting.
         log.append({**record, "error": e.code})
+        e.pane_id, e.agent = pane_id, agent
         raise
     prompt_result = herdr.agent_prompt(agent, decision.prompt, wait=wait, timeout_ms=wait_timeout_ms)
     log.append(record)

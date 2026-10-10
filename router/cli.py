@@ -213,6 +213,8 @@ def run_popup(policy: dict) -> int:
             break
 
     dcfg = policy.get("dispatch", {})
+    wait_s = int(dcfg.get("agent_start_timeout_ms", 60000)) // 1000
+    print(f"\n正在启动 {d.kind}，最多等 {wait_s} 秒（agent 弹出确认窗口时会一直等）…", flush=True)
     try:
         r = dispatch(d, target_pane=target, cwd=cwd,
                      direction=dcfg.get("direction", "auto"),
@@ -222,6 +224,11 @@ def run_popup(policy: dict) -> int:
         return 0
     except herdr.HerdrError as e:
         print(f"\n✗ 派发失败：{e}")
+        if e.pane_id:
+            screen = herdr.pane_screen(e.pane_id)
+            print(f"\n{e.agent} 的 pane {e.pane_id} 还开着，任务没有发出。它现在的画面：")
+            print("  " + (screen.replace("\n", "\n  ") or "(空)"))
+            print("\n多半是 agent 在等你确认（更新提示、信任目录…）。去那个 pane 处理后，把任务手动发给它。")
     _ask("\n按回车关闭")  # only on failure: leave the error on screen
     return 0
 
@@ -313,6 +320,8 @@ def main(argv: list[str] | None = None) -> int:
         print(json.dumps({"error": {"code": "not_in_herdr", "message": "run inside a Herdr pane"}}), file=sys.stderr)
         return 1
     dcfg = policy.get("dispatch", {})
+    wait_s = int(dcfg.get("agent_start_timeout_ms", 60000)) // 1000
+    print(f"\n正在启动 {d.kind}，最多等 {wait_s} 秒（agent 弹出确认窗口时会一直等）…", flush=True)
     try:
         r = dispatch(d, target_pane=args.pane, cwd=cwd, name=args.name,
                      direction=args.direction or dcfg.get("direction", "auto"),

@@ -181,6 +181,7 @@ p=model.load(); print(json.dumps(classify.systemone_request('把这个变量重�
 - `agent_not_ready`：agent 启动时被弹窗卡住（比如信任目录对话框），pane 和名字仍然存活，用 `herdr agent read <name>` 看界面，**问用户**再决定按什么键。
 - 档位"not on PATH"：`policy.env.extra_path` 会在启动时追加到 PATH；`binaries` 把 kind 映射到实际可执行名（cursor → cursor-agent）。
 - 每次 dispatch 的完整 Decision 都在 `decisions.jsonl` 里，出错的那条带 `"error"`。
+- **看日志要看 `error` 字段**：`timeout` / `agent_not_ready` 表示 agent 没就绪、任务没发出（pane 还开着）。最常见的原因是 agent 启动时弹窗：Codex 的更新提示（`Update available … 1. Update now (runs npm install -g)`）、信任目录对话框。弹窗里的「更新」会改用户的全局安装，**不要替用户按**，让用户选。popup 现在会在失败时把那个 pane 的画面打出来。
 
 **网页打不开 / 报错**
 - `{"error":"token required"}` 或「链接里的令牌不对」页：链接被截断（窄 pane 折行）或服务重启后令牌变了 → 用 `herdr-router ui --open`。令牌在 `state/ui-token`。
