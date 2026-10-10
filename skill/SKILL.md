@@ -43,7 +43,7 @@ User preference always wins. Pass what they specified and let the router fill th
 
 - `--profile <id>` pins a profile; `--kind codex` takes the best-ranked profile of that agent kind
 - `--model opus` / `--effort high` (low|medium|high|xhigh|max) patch whichever profile wins
-- Or inline tokens in the task: `@opus`, `@codex`, `@haiku`, `@<profile-id>`, `!deep`, `!quick`, `!long`, `!<dimension>=<value>`
+- Or inline tokens in the task: `@opus`, `@codex`, `@sol`, `@haiku`, `@glm`, `@mimo`, `@deepseek`, `@<profile-id>`, `!deep`, `!quick`, `!long`, `!<dimension>=<value>`
 - `--name <agent-name>` to choose the Herdr agent name; `--pane <id>` to split a different pane; `--cwd <dir>`.
 
 ## Errors

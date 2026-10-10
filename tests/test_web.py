@@ -84,10 +84,36 @@ class WebApiTest(unittest.TestCase):
         _, body = self.req("/api/policy")
         draft = copy.deepcopy(body["policy"])
         for p in draft["profiles"]:
-            p["enabled"] = p["id"] == "opencode-default"
+            p["enabled"] = p["id"] == "mimo-pro"
         status, out = self.req("/api/route", "POST", {"task": "rename x", "policy": draft, "use_backend": False})
         self.assertEqual(status, 200)
-        self.assertEqual(out["decision"]["profile_id"], "opencode-default")
+        self.assertEqual(out["decision"]["profile_id"], "mimo-pro")
+        self.assertEqual(out["decision"]["args"], ["mini", "-m", "opencode-go/mimo-v2.6-pro"])
+
+
+    def test_new_endpoints_need_token(self):
+        self.assertEqual(self.req("/api/models", token=False)[0], 401)
+        self.assertEqual(self.req("/api/map", "POST", {"x": "duration", "y": "difficulty"}, token=False)[0], 401)
+
+    def test_map(self):
+        status, out = self.req("/api/map", "POST", {"x": "duration", "y": "difficulty", "choice": {"task_type": "review"}})
+        self.assertEqual(status, 200)
+        self.assertEqual(len(out["grid"]), 48)
+        self.assertEqual(out["x"], [-0.5, 3.5])
+        status, out = self.req("/api/map", "POST", {"x": "duration", "y": "difficulty", "at": [0, 0]})
+        self.assertEqual((status, len(out["top"])), (200, 3))
+        self.assertEqual(self.req("/api/map", "POST", {"x": "duration", "y": "difficulty", "at": "x"})[0], 400)
+        self.assertEqual(self.req("/api/map", "POST", {"x": "task_type", "y": "difficulty"})[0], 400)
+        _, body = self.req("/api/policy")
+        bad = copy.deepcopy(body["policy"])
+        bad["profiles"][0]["point"]["difficulty"] = 9
+        self.assertEqual(self.req("/api/map", "POST", {"policy": bad, "x": "duration", "y": "difficulty"})[0], 422)
+
+    def test_models(self):
+        with mock.patch("router.catalog.cursor_models", return_value=[]):
+            status, out = self.req("/api/models")
+        self.assertEqual(status, 200)
+        self.assertIn("opus", [m["id"] for m in out["models"]["claude"]])
 
 
 if __name__ == "__main__":

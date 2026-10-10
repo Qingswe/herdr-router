@@ -1,5 +1,5 @@
 {
-  "version": 2,
+  "version": 3,
   "backend": {
     "enabled": true,
     "base_url": "https://opencode.ai/zen",
@@ -9,9 +9,14 @@
     "include_repo_signals": false
   },
   "scoring": {
-    "under_penalty": 3.0,
-    "over_penalty": 1.0,
-    "cost_weight": 0.05,
+    "under_penalty": 4.0,
+    "over_penalty": 0.5,
+    "tolerance": 0.5,
+    "cost_weight": 0.6,
+    "agent_cost": {
+      "opencode": 0.25
+    },
+    "time_weight": 0.01,
     "min_confidence": 0.35
   },
   "dimensions": [
@@ -59,7 +64,7 @@
       "id": "task_type",
       "label": "类型",
       "type": "choice",
-      "weight": 2.0,
+      "weight": 6.0,
       "instructions": "What kind of software task is this?",
       "options": {
         "implement": "Build a new feature or add new behaviour to code",
@@ -75,97 +80,656 @@
   ],
   "profiles": [
     {
+      "id": "luna-low",
+      "label": "Luna low",
+      "kind": "codex",
+      "model": "gpt-6-luna",
+      "effort": "low",
+      "cost": 0.0045,
+      "time": 2.13,
+      "enabled": true,
+      "point": {
+        "difficulty": 0.0,
+        "duration": 0.3,
+        "scope": 0.5
+      },
+      "affinity": {
+        "task_type": {
+          "review": 0.5
+        }
+      },
+      "note": "AA: II 22 · $0.0045/task · ~2.13 min/task"
+    },
+    {
+      "id": "luna-medium",
+      "label": "Luna medium",
+      "kind": "codex",
+      "model": "gpt-6-luna",
+      "effort": "medium",
+      "cost": 0.02,
+      "time": 2.75,
+      "enabled": false,
+      "point": {
+        "difficulty": 0.0,
+        "duration": 0.9,
+        "scope": 0.5
+      },
+      "affinity": {
+        "task_type": {
+          "review": 0.5
+        }
+      },
+      "note": "AA: II 30 · $0.02/task · ~2.75 min/task"
+    },
+    {
+      "id": "luna-high",
+      "label": "Luna high",
+      "kind": "codex",
+      "model": "gpt-6-luna",
+      "effort": "high",
+      "cost": 0.03,
+      "time": 3.35,
+      "enabled": true,
+      "point": {
+        "difficulty": 0.43,
+        "duration": 1.5,
+        "scope": 0.5
+      },
+      "affinity": {
+        "task_type": {
+          "review": 0.5
+        }
+      },
+      "note": "AA: II 33 · $0.03/task · ~3.35 min/task"
+    },
+    {
+      "id": "luna-xhigh",
+      "label": "Luna xhigh",
+      "kind": "codex",
+      "model": "gpt-6-luna",
+      "effort": "xhigh",
+      "cost": 0.04,
+      "time": 3.9,
+      "enabled": false,
+      "prompt_prefix": "这是一个高难度、耗时较长的任务。请先给出简短的执行计划（关键步骤与风险），再按计划执行。\n\n",
+      "point": {
+        "difficulty": 0.71,
+        "duration": 2.2,
+        "scope": 0.5
+      },
+      "affinity": {
+        "task_type": {
+          "review": 0.5
+        }
+      },
+      "note": "AA: II 35 · $0.04/task · ~3.9 min/task"
+    },
+    {
+      "id": "luna-max",
+      "label": "Luna max",
+      "kind": "codex",
+      "model": "gpt-6-luna",
+      "effort": "max",
+      "cost": 0.07,
+      "time": 6.1,
+      "enabled": false,
+      "prompt_prefix": "这是一个高难度、耗时较长的任务。请先给出简短的执行计划（关键步骤与风险），再按计划执行。\n\n",
+      "point": {
+        "difficulty": 1.14,
+        "duration": 2.8,
+        "scope": 0.5
+      },
+      "affinity": {
+        "task_type": {
+          "review": 0.5
+        }
+      },
+      "note": "AA: II 38 · $0.07/task · ~6.1 min/task"
+    },
+    {
       "id": "haiku-low",
-      "label": "Haiku 快速",
+      "label": "Haiku low",
       "kind": "claude",
       "model": "haiku",
       "effort": "low",
-      "cost": 1,
-      "enabled": true,
-      "ranges": { "difficulty": [0, 1], "duration": [0, 1], "scope": [0, 2] },
-      "affinity": { "task_type": { "review": 0.5 } }
+      "cost": 0.02,
+      "time": 2.48,
+      "enabled": false,
+      "point": {
+        "difficulty": 0.0,
+        "duration": 0.3,
+        "scope": 0.5
+      },
+      "affinity": {
+        "task_type": {
+          "review": 0.5
+        }
+      },
+      "note": "AA: II 29 · $0.02/task · ~2.48 min/task"
     },
     {
-      "id": "kimi-low",
-      "label": "Kimi 快速（备用）",
-      "kind": "kimi",
-      "effort": "low",
-      "cost": 1.2,
-      "enabled": true,
-      "ranges": { "difficulty": [0, 1], "duration": [0, 1], "scope": [0, 2] },
-      "affinity": { "task_type": { "review": 0.5 } }
-    },
-    {
-      "id": "opencode-default",
-      "label": "OpenCode（备用）",
-      "kind": "opencode",
-      "cost": 1.5,
-      "enabled": true,
-      "ranges": { "difficulty": [0, 1], "duration": [0, 1], "scope": [0, 2] },
-      "affinity": { "task_type": { "review": 0.5 } }
-    },
-    {
-      "id": "codex-medium",
-      "label": "Codex 批量",
-      "kind": "codex",
+      "id": "haiku-medium",
+      "label": "Haiku medium",
+      "kind": "claude",
+      "model": "haiku",
       "effort": "medium",
-      "cost": 2,
+      "cost": 0.05,
+      "time": 3.19,
       "enabled": true,
-      "ranges": { "difficulty": [0, 1], "duration": [1, 3], "scope": [1, 3] },
-      "affinity": { "task_type": { "review": 0.5 } }
+      "point": {
+        "difficulty": 0.57,
+        "duration": 0.9,
+        "scope": 0.5
+      },
+      "affinity": {
+        "task_type": {
+          "review": 0.5
+        }
+      },
+      "note": "AA: II 34 · $0.05/task · ~3.19 min/task"
     },
     {
-      "id": "droid-default",
-      "label": "Droid 批量（备用）",
-      "kind": "droid",
-      "cost": 2.2,
+      "id": "haiku-high",
+      "label": "Haiku high",
+      "kind": "claude",
+      "model": "haiku",
+      "effort": "high",
+      "cost": 0.08,
+      "time": 3.91,
       "enabled": true,
-      "ranges": { "difficulty": [0, 1], "duration": [1, 3], "scope": [1, 3] },
-      "affinity": { "task_type": { "review": 0.5 } }
+      "point": {
+        "difficulty": 1.14,
+        "duration": 1.5,
+        "scope": 0.5
+      },
+      "affinity": {
+        "task_type": {
+          "review": 0.5
+        }
+      },
+      "note": "AA: II 38 · $0.08/task · ~3.91 min/task"
     },
     {
-      "id": "sonnet-bulk",
-      "label": "Sonnet 批量（备用）",
+      "id": "haiku-xhigh",
+      "label": "Haiku xhigh",
+      "kind": "claude",
+      "model": "haiku",
+      "effort": "xhigh",
+      "cost": 0.12,
+      "time": 4.54,
+      "enabled": false,
+      "prompt_prefix": "这是一个高难度、耗时较长的任务。请先给出简短的执行计划（关键步骤与风险），再按计划执行。\n\n",
+      "point": {
+        "difficulty": 1.57,
+        "duration": 2.2,
+        "scope": 0.5
+      },
+      "affinity": {
+        "task_type": {
+          "review": 0.5
+        }
+      },
+      "note": "AA: II 41 · $0.12/task · ~4.54 min/task"
+    },
+    {
+      "id": "haiku-max",
+      "label": "Haiku max",
+      "kind": "claude",
+      "model": "haiku",
+      "effort": "max",
+      "cost": 0.21,
+      "time": 7.1,
+      "enabled": false,
+      "prompt_prefix": "这是一个高难度、耗时较长的任务。请先给出简短的执行计划（关键步骤与风险），再按计划执行。\n\n",
+      "point": {
+        "difficulty": 1.86,
+        "duration": 2.8,
+        "scope": 0.5
+      },
+      "affinity": {
+        "task_type": {
+          "review": 0.5
+        }
+      },
+      "note": "AA: II 43 · $0.21/task · ~7.1 min/task"
+    },
+    {
+      "id": "sonnet-low",
+      "label": "Sonnet low",
+      "kind": "claude",
+      "model": "sonnet",
+      "effort": "low",
+      "cost": 0.35,
+      "time": 5.04,
+      "enabled": false,
+      "point": {
+        "difficulty": 0.86,
+        "duration": 0.3
+      },
+      "affinity": {
+        "task_type": {
+          "review": 0.5
+        }
+      },
+      "note": "AA: II 36 · $0.35/task · ~5.04 min/task"
+    },
+    {
+      "id": "sonnet-medium",
+      "label": "Sonnet medium",
       "kind": "claude",
       "model": "sonnet",
       "effort": "medium",
-      "cost": 2.5,
+      "cost": 0.48,
+      "time": 6.48,
       "enabled": true,
-      "ranges": { "difficulty": [0, 1], "duration": [1, 3], "scope": [1, 3] },
-      "affinity": { "task_type": { "review": 0.5 } }
+      "point": {
+        "difficulty": 1.57,
+        "duration": 0.9
+      },
+      "affinity": {
+        "task_type": {
+          "review": 0.5
+        }
+      },
+      "note": "AA: II 41 · $0.48/task · ~6.48 min/task"
+    },
+    {
+      "id": "sonnet-high",
+      "label": "Sonnet high",
+      "kind": "claude",
+      "model": "sonnet",
+      "effort": "high",
+      "cost": 0.88,
+      "time": 7.92,
+      "enabled": false,
+      "point": {
+        "difficulty": 2.43,
+        "duration": 1.5
+      },
+      "affinity": {
+        "task_type": {
+          "review": 0.5
+        }
+      },
+      "note": "AA: II 47 · $0.88/task · ~7.92 min/task"
+    },
+    {
+      "id": "sonnet-xhigh",
+      "label": "Sonnet xhigh",
+      "kind": "claude",
+      "model": "sonnet",
+      "effort": "xhigh",
+      "cost": 2.01,
+      "time": 9.22,
+      "enabled": false,
+      "prompt_prefix": "这是一个高难度、耗时较长的任务。请先给出简短的执行计划（关键步骤与风险），再按计划执行。\n\n",
+      "point": {
+        "difficulty": 3.14,
+        "duration": 2.2
+      },
+      "affinity": {
+        "task_type": {
+          "review": 0.5
+        }
+      },
+      "note": "AA: II 52 · $2.01/task · ~9.22 min/task"
+    },
+    {
+      "id": "sonnet-max",
+      "label": "Sonnet max",
+      "kind": "claude",
+      "model": "sonnet",
+      "effort": "max",
+      "cost": 5.46,
+      "time": 14.4,
+      "enabled": false,
+      "prompt_prefix": "这是一个高难度、耗时较长的任务。请先给出简短的执行计划（关键步骤与风险），再按计划执行。\n\n",
+      "point": {
+        "difficulty": 3.71,
+        "duration": 2.8
+      },
+      "affinity": {
+        "task_type": {
+          "review": 0.5
+        }
+      },
+      "note": "AA: II 56 · $5.46/task · ~14.4 min/task"
+    },
+    {
+      "id": "sol-low",
+      "label": "Sol low",
+      "kind": "codex",
+      "model": "gpt-6.1-sol",
+      "effort": "low",
+      "cost": 0.13,
+      "time": 3.74,
+      "enabled": false,
+      "point": {
+        "difficulty": 1.71,
+        "duration": 0.3
+      },
+      "affinity": {
+        "task_type": {
+          "review": 0.5
+        }
+      },
+      "note": "AA: II 42 · $0.13/task · ~3.74 min/task"
+    },
+    {
+      "id": "sol-medium",
+      "label": "Sol medium",
+      "kind": "codex",
+      "model": "gpt-6.1-sol",
+      "effort": "medium",
+      "cost": 0.21,
+      "time": 4.81,
+      "enabled": true,
+      "point": {
+        "difficulty": 2.57,
+        "duration": 0.9
+      },
+      "affinity": {
+        "task_type": {
+          "review": 0.5
+        }
+      },
+      "note": "AA: II 48 · $0.21/task · ~4.81 min/task"
+    },
+    {
+      "id": "sol-high",
+      "label": "Sol high",
+      "kind": "codex",
+      "model": "gpt-6.1-sol",
+      "effort": "high",
+      "cost": 0.32,
+      "time": 5.88,
+      "enabled": true,
+      "point": {
+        "difficulty": 2.86,
+        "duration": 1.5
+      },
+      "affinity": {
+        "task_type": {
+          "review": 0.5
+        }
+      },
+      "note": "AA: II 50 · $0.32/task · ~5.88 min/task"
+    },
+    {
+      "id": "sol-xhigh",
+      "label": "Sol xhigh",
+      "kind": "codex",
+      "model": "gpt-6.1-sol",
+      "effort": "xhigh",
+      "cost": 0.39,
+      "time": 6.85,
+      "enabled": true,
+      "prompt_prefix": "这是一个高难度、耗时较长的任务。请先给出简短的执行计划（关键步骤与风险），再按计划执行。\n\n",
+      "point": {
+        "difficulty": 3.0,
+        "duration": 2.2
+      },
+      "affinity": {
+        "task_type": {
+          "review": 0.5
+        }
+      },
+      "note": "AA: II 51 · $0.39/task · ~6.85 min/task"
+    },
+    {
+      "id": "sol-max",
+      "label": "Sol max",
+      "kind": "codex",
+      "model": "gpt-6.1-sol",
+      "effort": "max",
+      "cost": 0.72,
+      "time": 10.7,
+      "enabled": false,
+      "prompt_prefix": "这是一个高难度、耗时较长的任务。请先给出简短的执行计划（关键步骤与风险），再按计划执行。\n\n",
+      "point": {
+        "difficulty": 3.14,
+        "duration": 2.8
+      },
+      "affinity": {
+        "task_type": {
+          "review": 0.5
+        }
+      },
+      "note": "AA: II 52 · $0.72/task · ~10.7 min/task"
+    },
+    {
+      "id": "opus-low",
+      "label": "Opus low",
+      "kind": "claude",
+      "model": "opus",
+      "effort": "low",
+      "cost": 0.55,
+      "time": 4.48,
+      "enabled": false,
+      "point": {
+        "difficulty": 1.71,
+        "duration": 0.3
+      },
+      "affinity": {
+        "task_type": {
+          "review": 0.5
+        }
+      },
+      "note": "AA: II 42 · $0.55/task · ~4.48 min/task"
+    },
+    {
+      "id": "opus-medium",
+      "label": "Opus medium",
+      "kind": "claude",
+      "model": "opus",
+      "effort": "medium",
+      "cost": 1.34,
+      "time": 5.76,
+      "enabled": true,
+      "point": {
+        "difficulty": 3.0,
+        "duration": 0.9
+      },
+      "affinity": {
+        "task_type": {
+          "review": 0.5
+        }
+      },
+      "note": "AA: II 51 · $1.34/task · ~5.76 min/task"
     },
     {
       "id": "opus-high",
-      "label": "Opus 攻坚",
+      "label": "Opus high",
       "kind": "claude",
       "model": "opus",
       "effort": "high",
-      "cost": 4,
+      "cost": 1.82,
+      "time": 7.04,
       "enabled": true,
-      "ranges": { "difficulty": [2, 4], "duration": [0, 1], "scope": [0, 3] },
-      "affinity": { "task_type": { "review": 0.5, "research": 0.5 } }
+      "point": {
+        "difficulty": 3.43,
+        "duration": 1.5
+      },
+      "affinity": {
+        "task_type": {
+          "review": 0.5
+        }
+      },
+      "note": "AA: II 54 · $1.82/task · ~7.04 min/task"
     },
     {
       "id": "opus-xhigh",
-      "label": "Opus 深度",
+      "label": "Opus xhigh",
       "kind": "claude",
       "model": "opus",
       "effort": "xhigh",
-      "cost": 5,
+      "cost": 3.46,
+      "time": 8.19,
       "enabled": true,
       "prompt_prefix": "这是一个高难度、耗时较长的任务。请先给出简短的执行计划（关键步骤与风险），再按计划执行。\n\n",
-      "ranges": { "difficulty": [2, 4], "duration": [2, 3], "scope": [0, 3] },
-      "affinity": { "task_type": { "review": 0.5 } }
+      "point": {
+        "difficulty": 3.71,
+        "duration": 2.2
+      },
+      "affinity": {
+        "task_type": {
+          "review": 0.5
+        }
+      },
+      "note": "AA: II 56 · $3.46/task · ~8.19 min/task"
+    },
+    {
+      "id": "opus-max",
+      "label": "Opus max",
+      "kind": "claude",
+      "model": "opus",
+      "effort": "max",
+      "cost": 5.98,
+      "time": 12.8,
+      "enabled": false,
+      "prompt_prefix": "这是一个高难度、耗时较长的任务。请先给出简短的执行计划（关键步骤与风险），再按计划执行。\n\n",
+      "point": {
+        "difficulty": 4.0,
+        "duration": 2.8
+      },
+      "affinity": {
+        "task_type": {
+          "review": 0.5
+        }
+      },
+      "note": "AA: II 58 · $5.98/task · ~12.8 min/task"
+    },
+    {
+      "id": "deepseek-flash",
+      "label": "DeepSeek V4.1 Flash",
+      "kind": "opencode",
+      "model": "opencode-go/deepseek-v4.1-flash",
+      "cost": 0.27,
+      "time": 4.8,
+      "enabled": true,
+      "point": {
+        "difficulty": 1.29,
+        "duration": 0.15,
+        "scope": 0.5
+      },
+      "affinity": {
+        "task_type": {
+          "review": 0.5
+        }
+      },
+      "note": "AA: II 39 (max) · $0.27/task · 4.8 min/task，最快"
+    },
+    {
+      "id": "mimo-flash",
+      "label": "MiMo V2.6 Flash",
+      "kind": "opencode",
+      "model": "opencode-go/mimo-v2.6-flash",
+      "cost": 0.06,
+      "time": 16.8,
+      "enabled": true,
+      "point": {
+        "difficulty": 1.14,
+        "duration": 0.8
+      },
+      "affinity": {
+        "task_type": {
+          "review": 0.5
+        }
+      },
+      "note": "AA: II 38 · $0.06/task · ~16.8 min/task（按 Pro 估）"
+    },
+    {
+      "id": "glm-flash",
+      "label": "GLM-5.3 Flash",
+      "kind": "opencode",
+      "model": "opencode-go/glm-5.3-flash",
+      "cost": 0.25,
+      "time": 14.3,
+      "enabled": true,
+      "point": {
+        "difficulty": 1.71,
+        "duration": 0.9
+      },
+      "affinity": {
+        "task_type": {
+          "review": 0.5
+        }
+      },
+      "note": "AA: II 42 · $0.25/task · 14.3 min/task"
+    },
+    {
+      "id": "mimo-pro",
+      "label": "MiMo V2.6 Pro",
+      "kind": "opencode",
+      "model": "opencode-go/mimo-v2.6-pro",
+      "cost": 0.13,
+      "time": 22.6,
+      "enabled": true,
+      "point": {
+        "difficulty": 2.29,
+        "duration": 1.0
+      },
+      "affinity": {
+        "task_type": {
+          "review": 0.5
+        }
+      },
+      "note": "AA: II 46 · $0.13/task · 22.6 min/task"
+    },
+    {
+      "id": "glm",
+      "label": "GLM-5.3",
+      "kind": "opencode",
+      "model": "opencode-go/glm-5.3",
+      "cost": 2.01,
+      "time": 11.4,
+      "enabled": true,
+      "point": {
+        "difficulty": 2.14,
+        "duration": 1.0
+      },
+      "affinity": {
+        "task_type": {
+          "review": 0.5
+        }
+      },
+      "note": "AA: II 45 (max) · $2.01/task · 11.4 min/task；编程 agent 指数 53.6"
+    },
+    {
+      "id": "kimi",
+      "label": "Kimi K3（备用）",
+      "kind": "kimi",
+      "effort": "high",
+      "cost": 2.0,
+      "time": 18.8,
+      "enabled": false,
+      "point": {
+        "difficulty": 2.0,
+        "duration": 1.5
+      },
+      "affinity": {
+        "task_type": {
+          "review": 0.5
+        }
+      },
+      "note": "AA: II 44 (max) · $2.00/task · 18.8 min/task。被 MiMo Pro 和 Sol 全面压制，默认停用"
     },
     {
       "id": "codex-review",
       "label": "Codex 交叉审查",
       "kind": "codex",
+      "model": "gpt-6.1-sol",
       "effort": "high",
-      "cost": 3,
+      "cost": 0.32,
+      "time": 5.9,
       "enabled": true,
-      "ranges": { "difficulty": [0, 4], "duration": [0, 3], "scope": [0, 3] },
-      "affinity": { "task_type": { "*": 0, "review": 1 } }
+      "affinity": {
+        "task_type": {
+          "*": 0,
+          "review": 1
+        }
+      },
+      "note": "AA: II 50 · $0.32/task"
     },
     {
       "id": "sonnet-research",
@@ -173,42 +737,181 @@
       "kind": "claude",
       "model": "sonnet",
       "effort": "medium",
-      "cost": 2.5,
+      "cost": 0.48,
+      "time": 1.4,
       "enabled": true,
-      "ranges": { "difficulty": [0, 4], "duration": [0, 1], "scope": [0, 3] },
-      "affinity": { "task_type": { "*": 0, "research": 1 } }
+      "point": {
+        "duration": 0.6
+      },
+      "affinity": {
+        "task_type": {
+          "*": 0,
+          "research": 1
+        }
+      },
+      "note": "AA: II 41 · $0.48/task · 7s"
     },
     {
       "id": "cursor-ui",
       "label": "Cursor 界面",
       "kind": "cursor",
-      "cost": 2,
+      "cost": 0.5,
       "enabled": true,
-      "ranges": { "difficulty": [0, 1], "duration": [0, 2], "scope": [0, 2] },
-      "affinity": { "task_type": { "*": 0, "ui": 1 } }
+      "point": {
+        "difficulty": 1.5,
+        "duration": 1.0
+      },
+      "affinity": {
+        "task_type": {
+          "*": 0,
+          "ui": 1
+        }
+      },
+      "note": "Cursor auto 模型，AA 无数据"
     }
   ],
   "aliases": {
-    "@opus": "opus-high",
+    "@opus": "opus-medium",
     "@deep": "opus-xhigh",
     "@sonnet": "sonnet-research",
-    "@haiku": "haiku-low",
-    "@codex": "codex-medium",
+    "@haiku": "haiku-high",
+    "@codex": "sol-medium",
+    "@sol": "sol-medium",
+    "@luna": "luna-high",
     "@review": "codex-review",
-    "@kimi": "kimi-low",
+    "@kimi": "kimi",
     "@cursor": "cursor-ui",
-    "@droid": "droid-default",
-    "@opencode": "opencode-default",
-    "!quick": { "difficulty": 0, "duration": 0 },
-    "!easy": { "difficulty": 0 },
-    "!hard": { "difficulty": 3 },
-    "!deep": { "difficulty": 4 },
-    "!long": { "duration": 3 },
-    "!short": { "duration": 0 }
+    "@glm": "glm",
+    "@deepseek": "deepseek-flash",
+    "@mimo": "mimo-pro",
+    "!quick": {
+      "difficulty": 0,
+      "duration": 0
+    },
+    "!easy": {
+      "difficulty": 0
+    },
+    "!hard": {
+      "difficulty": 3
+    },
+    "!deep": {
+      "difficulty": 4
+    },
+    "!long": {
+      "duration": 3
+    },
+    "!short": {
+      "duration": 0
+    }
   },
-  "binaries": { "cursor": "cursor-agent" },
-  "dispatch": { "agent_start_timeout_ms": 60000, "direction": "auto" },
+  "binaries": {
+    "cursor": "cursor-agent"
+  },
+  "dispatch": {
+    "agent_start_timeout_ms": 60000,
+    "direction": "auto"
+  },
   "env": {
-    "extra_path": ["~/.local/bin", "/opt/homebrew/bin", "/usr/local/bin", "~/.opencode/bin", "~/.cargo/bin"]
+    "extra_path": [
+      "~/.local/bin",
+      "/opt/homebrew/bin",
+      "/usr/local/bin",
+      "~/.opencode/bin",
+      "~/.cargo/bin"
+    ]
+  },
+  "models": {
+    "claude-haiku": {
+      "label": "Claude Haiku 5.5",
+      "vendor": "anthropic",
+      "via": {
+        "claude": "haiku",
+        "opencode": "opencode-go/claude-haiku-5-5",
+        "droid": "claude-haiku-5-5"
+      }
+    },
+    "claude-sonnet": {
+      "label": "Claude Sonnet 5.5",
+      "vendor": "anthropic",
+      "via": {
+        "claude": "sonnet",
+        "opencode": "opencode/claude-sonnet-5-5",
+        "droid": "claude-sonnet-5-5"
+      }
+    },
+    "claude-opus": {
+      "label": "Claude Opus 5.5",
+      "vendor": "anthropic",
+      "via": {
+        "claude": "opus",
+        "opencode": "opencode/claude-opus-5-5",
+        "droid": "claude-opus-5-5"
+      }
+    },
+    "gpt-6.1-sol": {
+      "label": "GPT-6.1 Sol",
+      "vendor": "openai",
+      "via": {
+        "codex": "gpt-6.1-sol",
+        "opencode": "opencode/gpt-6.1-sol",
+        "droid": "gpt-6.1-sol"
+      }
+    },
+    "gpt-6-luna": {
+      "label": "GPT-6 Luna",
+      "vendor": "openai",
+      "via": {
+        "codex": "gpt-6-luna",
+        "opencode": "opencode-go/gpt-6-luna",
+        "droid": "gpt-6-luna"
+      }
+    },
+    "glm-5.3": {
+      "label": "GLM-5.3",
+      "vendor": "zai",
+      "via": {
+        "opencode": "opencode-go/glm-5.3",
+        "droid": "glm-5.3"
+      }
+    },
+    "glm-5.3-flash": {
+      "label": "GLM-5.3 Flash",
+      "vendor": "zai",
+      "via": {
+        "opencode": "opencode-go/glm-5.3-flash",
+        "droid": "glm-5.3-flash"
+      }
+    },
+    "deepseek-v4.1-flash": {
+      "label": "DeepSeek V4.1 Flash",
+      "vendor": "deepseek",
+      "via": {
+        "opencode": "opencode-go/deepseek-v4.1-flash",
+        "droid": "deepseek-v4.1-flash"
+      }
+    },
+    "mimo-v2.6-pro": {
+      "label": "MiMo V2.6 Pro",
+      "vendor": "xiaomi",
+      "via": {
+        "opencode": "opencode-go/mimo-v2.6-pro"
+      }
+    },
+    "mimo-v2.6-flash": {
+      "label": "MiMo V2.6 Flash",
+      "vendor": "xiaomi",
+      "via": {
+        "opencode": "opencode-go/mimo-v2.6-flash"
+      }
+    },
+    "kimi-k3": {
+      "label": "Kimi K3",
+      "vendor": "moonshot",
+      "via": {
+        "kimi": "kimi-k3",
+        "opencode": "opencode-go/kimi-k3",
+        "droid": "kimi-k3"
+      }
+    }
   }
 }

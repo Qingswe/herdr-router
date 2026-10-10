@@ -27,9 +27,9 @@ from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
-from . import __version__, herdr, model
+from . import __version__, catalog, herdr, model
 from .classify import assess, parse_overrides
-from .score import NoAgentAvailable, decide
+from .score import NoAgentAvailable, decide, rank_at, territory
 
 WEB_ROOT = model.REPO_ROOT / "web"
 STATIC = {"/": "index.html", "/index.html": "index.html", "/app.js": "app.js", "/style.css": "style.css"}
@@ -223,6 +223,8 @@ class Handler(BaseHTTPRequestHandler):
                                     "path": str(user), "installed": _installed_kinds(policy)})
         if url.path == "/api/policy/default":
             return self._json(200, {"policy": model.load_default()})
+        if url.path == "/api/models":
+            return self._json(200, {"models": catalog.models(model.load())})
         if url.path == "/api/log":
             limit = int(urllib.parse.parse_qs(url.query).get("limit", ["100"])[0])
             return self._json(200, {"entries": _recent_log(max(1, min(limit, 1000)))})
@@ -238,7 +240,7 @@ class Handler(BaseHTTPRequestHandler):
         if urllib.parse.urlsplit(self.path).path != "/api/policy":
             return self._json(HTTPStatus.NOT_FOUND, {"error": "not found"})
         try:
-            policy = self._body()
+            policy = model.migrate(self._body())
         except (ValueError, json.JSONDecodeError) as e:
             return self._json(HTTPStatus.BAD_REQUEST, {"error": str(e)})
         kinds = herdr.supported_kinds() or None
@@ -253,17 +255,20 @@ class Handler(BaseHTTPRequestHandler):
             return
         if not self._authed():
             return self._json(HTTPStatus.UNAUTHORIZED, {"error": "token required"})
-        if urllib.parse.urlsplit(self.path).path != "/api/route":
+        path = urllib.parse.urlsplit(self.path).path
+        if path not in ("/api/route", "/api/map"):
             return self._json(HTTPStatus.NOT_FOUND, {"error": "not found"})
         try:
             body = self._body()
         except (ValueError, json.JSONDecodeError) as e:
             return self._json(HTTPStatus.BAD_REQUEST, {"error": str(e)})
+        if path == "/api/map":
+            return self._map(body)
         task = str(body.get("task", "")).strip()
         if not task:
             return self._json(HTTPStatus.BAD_REQUEST, {"error": "empty task"})
         # Dry-run against the editor's unsaved draft when one is sent.
-        policy = body.get("policy") or model.load()
+        policy = model.migrate(body.get("policy")) or model.load()
         if errors := model.validate(policy, herdr.supported_kinds() or None):
             return self._json(HTTPStatus.UNPROCESSABLE_ENTITY, {"errors": errors})
         cleaned, ov = parse_overrides(task, policy)
@@ -273,6 +278,27 @@ class Handler(BaseHTTPRequestHandler):
         except NoAgentAvailable as e:
             return self._json(200, {"assessment": a.to_dict(policy), "error": str(e)})
         return self._json(200, {"decision": d.to_dict()})
+
+    def _map(self, body: dict) -> None:
+        policy = model.migrate(body.get("policy")) or model.load()
+        if errors := model.validate(policy, herdr.supported_kinds() or None):
+            return self._json(HTTPStatus.UNPROCESSABLE_ENTITY, {"errors": errors})
+        score_ids = {d["id"] for d in model.dimensions(policy, "score")}
+        x, y = body.get("x"), body.get("y")
+        if x not in score_ids or y not in score_ids:
+            return self._json(HTTPStatus.BAD_REQUEST, {"error": "x and y must be score dimension ids"})
+        choice = body.get("choice") if isinstance(body.get("choice"), dict) else {}
+        at = body.get("at")
+        if at is not None:  # one point: the top three there, for the hover readout
+            if not (isinstance(at, list) and len(at) == 2 and all(isinstance(v, (int, float)) for v in at)):
+                return self._json(HTTPStatus.BAD_REQUEST, {"error": "at must be [x, y]"})
+            ranking = rank_at(policy, {x: float(at[0]), y: float(at[1])}, choice)
+            return self._json(200, {"top": [{"id": r.profile_id, "total": r.total} for r in ranking[:3]]})
+        try:
+            steps = max(8, min(128, int(body.get("steps", 48))))
+        except (TypeError, ValueError):
+            return self._json(HTTPStatus.BAD_REQUEST, {"error": "steps must be an integer"})
+        return self._json(200, territory(policy, x, y, choice, steps=steps))
 
 
 # --------------------------------------------------------------------------

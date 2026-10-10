@@ -3,25 +3,27 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-<title>herdr-router 坐标编辑器</title>
+<meta name="color-scheme" content="dark">
+<title>herdr-router</title>
 <link rel="icon" href="data:,">
 <link rel="stylesheet" href="/style.css">
 </head>
 <body>
 <header class="top">
   <div class="brand">
+    <span class="logo" aria-hidden="true"></span>
     <strong>herdr-router</strong>
-    <span class="muted" id="source"></span>
+    <span class="muted mono" id="source"></span>
   </div>
   <div class="actions">
     <span class="dirty" id="dirty" hidden>未保存</span>
     <button id="btn-revert" class="ghost" title="放弃未保存的修改">撤销</button>
     <button id="btn-defaults" class="ghost" title="把编辑器内容换成内置默认值（仍需保存）">默认值</button>
-    <button id="btn-save" class="primary">保存</button>
+    <button id="btn-save" class="primary" title="保存（⌘S）">保存</button>
   </div>
 </header>
 <nav class="tabs" id="tabs">
-  <button data-tab="chart" class="on">坐标与档位</button>
+  <button data-tab="chart" class="on">路由图</button>
   <button data-tab="dims">维度</button>
   <button data-tab="trial">试运行</button>
   <button data-tab="settings">设置</button>

@@ -51,13 +51,32 @@ def load(path: Path | None = None) -> dict:
     for p in (path, user_policy_path(), DEFAULT_POLICY):
         if p and p.is_file():
             with p.open(encoding="utf-8") as f:
-                return json.load(f)
+                return migrate(json.load(f))
     raise FileNotFoundError(DEFAULT_POLICY)
 
 
 def load_default() -> dict:
     with DEFAULT_POLICY.open(encoding="utf-8") as f:
-        return json.load(f)
+        return migrate(json.load(f))
+
+
+def migrate(policy: dict) -> dict:
+    """v2 profiles held a [min, max] range per score dimension; v3 holds one point.
+    A range becomes its midpoint; a full range (or none) means the profile does not care."""
+    if not isinstance(policy, dict) or policy.get("version", 2) >= 3:
+        return policy
+    levels = {d.get("id"): len(d.get("levels") or []) for d in policy.get("dimensions", []) if isinstance(d, dict)}
+    for pr in policy.get("profiles", []):
+        if not isinstance(pr, dict) or "ranges" not in pr:
+            continue
+        point = {}
+        for did, rng in (pr.pop("ranges") or {}).items():
+            if isinstance(rng, list) and len(rng) == 2 and list(rng) != [0, levels.get(did, 0) - 1]:
+                point[did] = (rng[0] + rng[1]) / 2
+        if point:
+            pr["point"] = point
+    policy["version"] = 3
+    return policy
 
 
 # --------------------------------------------------------------------------
@@ -76,7 +95,7 @@ def profile(policy: dict, profile_id: str) -> dict | None:
 
 
 # --------------------------------------------------------------------------
-# Validation: a list of {"path": "profiles[2].ranges.difficulty", "message": ...}
+# Validation: a list of {"path": "profiles[2].point.difficulty", "message": ...}
 
 def validate(policy: dict, kinds: list[str] | None = None) -> list[dict]:
     errs: list[dict] = []
@@ -144,18 +163,17 @@ def validate(policy: dict, kinds: list[str] | None = None) -> list[dict]:
             err(f"{p}.model", "model must be a plain identifier (letters, digits, . _ - : / [ ] = ,)")
         if not _is_num(pr.get("cost", 0)) or pr.get("cost", 0) < 0:
             err(f"{p}.cost", "cost must be a number >= 0")
-        for did, rng in (pr.get("ranges") or {}).items():
-            rp = f"{p}.ranges.{did}"
+        if not _is_num(pr.get("time", 0)) or pr.get("time", 0) < 0:
+            err(f"{p}.time", "time (minutes per task) must be a number >= 0")
+        if "ranges" in pr:
+            err(f"{p}.ranges", "ranges was replaced by point in policy version 3")
+        for did, v in (pr.get("point") or {}).items():
+            pp = f"{p}.point.{did}"
             d = dim_by_id.get(did)
             if not d or d.get("type") != "score":
-                err(rp, f"'{did}' is not a score dimension")
-                continue
-            if (not isinstance(rng, list) or len(rng) != 2 or not all(_is_num(x) for x in rng)):
-                err(rp, "range must be [min, max]")
-                continue
-            hi = levels_max(d)
-            if not (0 <= rng[0] <= rng[1] <= hi):
-                err(rp, f"need 0 <= min <= max <= {hi}")
+                err(pp, f"'{did}' is not a score dimension")
+            elif not _is_num(v) or not 0 <= v <= levels_max(d):
+                err(pp, f"point must be a number within 0..{levels_max(d)}")
         for did, aff in (pr.get("affinity") or {}).items():
             ap = f"{p}.affinity.{did}"
             d = dim_by_id.get(did)
@@ -172,6 +190,27 @@ def validate(policy: dict, kinds: list[str] | None = None) -> list[dict]:
                     err(f"{ap}.{opt}", "affinity must be between 0 and 1")
     if profiles and not any(isinstance(pr, dict) and pr.get("enabled", True) for pr in profiles):
         err("profiles", "at least one profile must be enabled")
+
+    # models: a catalog of model id -> {label, vendor, via: {agent kind: that agent's model id}};
+    # the editor uses it to switch which agent runs a model and to colour by vendor.
+    catalog = policy.get("models", {})
+    if not isinstance(catalog, dict):
+        err("models", "models must be an object of model id -> {label, vendor, via}")
+        catalog = {}
+    for mid, entry in catalog.items():
+        mp = f"models.{mid}"
+        if not isinstance(entry, dict):
+            err(mp, "a model entry must be an object")
+            continue
+        via = entry.get("via")
+        if not isinstance(via, dict) or not via:
+            err(f"{mp}.via", "via must map at least one agent kind to that agent's model id")
+            continue
+        for k, v in via.items():
+            if k not in kinds:
+                err(f"{mp}.via.{k}", f"unknown herdr agent kind '{k}'")
+            elif not isinstance(v, str) or not re.match(r"^[\w.:\[\]=,/-]+$", v):
+                err(f"{mp}.via.{k}", "model id must be a plain identifier")
 
     for tok, target in (policy.get("aliases") or {}).items():
         ap = f"aliases.{tok}"
@@ -192,7 +231,16 @@ def validate(policy: dict, kinds: list[str] | None = None) -> list[dict]:
             err(ap, "alias must start with @ (profile) or ! (dimension values)")
 
     sc = policy.get("scoring", {})
-    for key in ("under_penalty", "over_penalty", "cost_weight", "min_confidence"):
+    ac = sc.get("agent_cost", {})
+    if not isinstance(ac, dict):
+        err("scoring.agent_cost", "agent_cost must map agent kinds to a factor >= 0")
+    else:
+        for k, v in ac.items():
+            if k not in kinds:
+                err(f"scoring.agent_cost.{k}", f"unknown herdr agent kind '{k}'")
+            elif not _is_num(v) or v < 0:
+                err(f"scoring.agent_cost.{k}", "factor must be a number >= 0")
+    for key in ("under_penalty", "over_penalty", "cost_weight", "time_weight", "min_confidence", "tolerance"):
         if key in sc and (not _is_num(sc[key]) or sc[key] < 0):
             err(f"scoring.{key}", "must be a number >= 0")
     be = policy.get("backend", {})
