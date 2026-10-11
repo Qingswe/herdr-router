@@ -16,6 +16,7 @@ const appFile = path.join(root, "web/app.js");
 const htmlFile = path.join(root, "web/index.html");
 const source = fs.readFileSync(appFile, "utf8");
 const html = fs.readFileSync(htmlFile, "utf8");
+const i18nSource = fs.readFileSync(path.join(root, "web/i18n.js"), "utf8");
 const digest = (s) => crypto.createHash("sha256").update(s).digest("hex").slice(0, 12);
 const copy = (value) => JSON.parse(JSON.stringify(value));
 const decode = (s) => s.replace(/&(amp|lt|gt|quot|#39);/g,
@@ -146,7 +147,7 @@ const trialReply = () => ({ decision: {
   ],
 } });
 
-async function harness({ manualMap = false, deferDefaults = false, policy = fixture() } = {}) {
+async function harness({ manualMap = false, deferDefaults = false, policy = fixture(), languages = ["zh-CN"], storedLanguage = null, blockedStorage = false } = {}) {
   const document = new Element("document"); document.innerHTML = html;
   document.createElement = (tag) => new Element(tag);
   document.activeElement = document.querySelector("body");
@@ -177,7 +178,8 @@ async function harness({ manualMap = false, deferDefaults = false, policy = fixt
   };
   const context = vm.createContext({
     document, window, fetch, CSS: { escape: (s) => s }, confirm: () => true,
-    navigator: { clipboard: { writeText: async () => {} } },
+    localStorage: { getItem: () => { if (blockedStorage) throw new Error("blocked"); return storedLanguage; }, setItem: (key, value) => { if (blockedStorage) throw new Error("blocked"); assert.equal(key, "herdr-router.language"); storedLanguage = value; } },
+    navigator: { languages, clipboard: { writeText: async () => {} } },
     setTimeout: (fn, ms = 0) => { const id = ++timerId; timers.set(id, { fn, at: now + ms }); return id; },
     clearTimeout: (id) => timers.delete(id), console,
   });
@@ -193,6 +195,9 @@ async function harness({ manualMap = false, deferDefaults = false, policy = fixt
   };
   const h = {
     document, requests, errors,
+    storedLanguage: () => storedLanguage,
+    translate: (key, values) => window.RouterI18n.t(key, values),
+    strings: () => copy(window.RouterI18n.strings),
     el(selector) { const node = document.querySelector(selector); assert.ok(node, `Missing DOM control: ${selector}`); return node; },
     state(expr = "S.policy") { return copy(vm.runInContext(expr, context)); },
     profile(id = "alpha") { return h.state().profiles.find((p) => p.id === id); },
@@ -224,6 +229,7 @@ async function harness({ manualMap = false, deferDefaults = false, policy = fixt
     async tab(name) { await h.click(`#tabs [data-tab="${name}"]`); },
     async startTrial(task = "Review this change") { await h.input("#cmd, #trial-task", task); await h.click('[data-act="run-trial"]'); },
   };
+  vm.runInContext(i18nSource, context, { filename: "i18n.js" });
   vm.runInContext(source, context, { filename: appFile, timeout: 5000 });
   await flush();
   assert.ok(h.state(), "Initial policy failed to load");
@@ -464,6 +470,64 @@ test("a queued newer map survives an in-flight network failure", async (h) => {
   const latest = h.request("/api/map"); assert.equal(latest.body.policy.profiles[0].label, "Recover latest");
   latest.reply(200, mapReply()); await h.flush(); assert.ok(h.state("S.map"));
 }, { manualMap: true });
+
+test("English is usable across every editor view", async (h) => {
+  assert.equal(h.el("html").getAttribute("lang"), "en");
+  assert.equal(h.el("#btn-save").textContent, "Save");
+  assert.match(h.el("#btn-revert").getAttribute("title"), /Discard/);
+  for (const tab of ["chart", "dims", "trial", "settings", "json"]) {
+    await h.tab(tab);
+    assert.doesNotMatch(h.el("#main").textContent.replace("中文", ""), /\p{Script=Han}/u);
+  }
+  await h.tab("chart"); await h.select();
+  assert.match(h.el("#editor").textContent, /Basic information/);
+  await h.startTrial(); h.request("/api/route").reply(200, trialReply()); await h.flush();
+  assert.match(h.el("#trialbox").textContent, /Recommended profile/);
+  assert.doesNotMatch(h.el("#trialbox").textContent, /\p{Script=Han}/u);
+}, { languages: ["en-US"] });
+
+test("switching language preserves draft, trial, history and unapplied JSON", async (h) => {
+  await h.select(); await h.editLabel("User label 中文");
+  await h.startTrial(); h.request("/api/route").reply(200, trialReply()); await h.flush();
+  const policy = h.state(), trial = h.state("S.trial"), history = h.state("H");
+  await h.tab("settings"); await h.input("#bang-json", '{"!hard":');
+  await h.change("#ui-language", "zh");
+  assert.equal(h.storedLanguage(), "zh");
+  assert.equal(h.el("html").getAttribute("lang"), "zh-CN");
+  assert.equal(h.el("#btn-save").textContent, "保存");
+  assert.equal(h.el("#btn-undo").textContent, "撤销");
+  assert.equal(h.el("#bang-json").value, '{"!hard":');
+  assert.deepEqual(h.state(), policy); assert.deepEqual(h.state("S.trial"), trial);
+  assert.deepEqual(h.state("H"), history); assert.equal(h.dirty(), true);
+  await h.change("#ui-language", "en");
+  assert.equal(h.el("#btn-undo").textContent, "Undo");
+  await h.click("#btn-undo"); assert.equal(h.profile().label, "Alpha");
+}, { languages: ["en"] });
+
+test("persisted preference wins over browser language", async (h) => {
+  assert.equal(h.el("#btn-save").textContent, "保存");
+}, { languages: ["en-US"], storedLanguage: "zh" });
+
+test("unsupported languages default to English", async (h) => {
+  assert.equal(h.el("#btn-save").textContent, "Save");
+}, { languages: ["fr-FR"], storedLanguage: "invalid" });
+
+test("browser Chinese works even when storage is blocked", async (h) => {
+  assert.equal(h.el("#btn-save").textContent, "保存");
+  await h.tab("settings"); await h.change("#ui-language", "en");
+  assert.equal(h.el("#btn-save").textContent, "Save");
+}, { languages: ["fr", "zh-TW", "en"], blockedStorage: true });
+
+test("translation tables have identical keys and interpolation placeholders", async (h) => {
+  const { en, zh } = h.strings();
+  assert.deepEqual(Object.keys(en).sort(), Object.keys(zh).sort());
+  for (const key of Object.keys(en)) {
+    const placeholders = (s) => [...s.matchAll(/\{(\w+)\}/g)].map((m) => m[1]).sort();
+    assert.deepEqual(placeholders(en[key]), placeholders(zh[key]), key);
+  }
+  assert.equal(h.translate("added_p0_profiles", { p0: 3 }), "Added 3 profiles");
+  assert.equal(h.translate("new_profile"), "New profile");
+}, { languages: [] });
 
 (async () => {
   let failed = 0, changedDuringRun = false;

@@ -60,6 +60,22 @@ class WebApiTest(unittest.TestCase):
         with urllib.request.urlopen(self.base + "/", timeout=5) as r:
             self.assertIn(b"herdr-router", r.read())
 
+    def test_editor_language_is_selected_client_side(self):
+        for language in ("en-US,en;q=0.9", "zh-CN,zh;q=0.9", "fr"):
+            request = urllib.request.Request(self.base + "/", headers={"Accept-Language": language})
+            with urllib.request.urlopen(request, timeout=5) as response:
+                html = response.read().decode()
+                self.assertIn('<html lang="en">', html)
+                self.assertIn('data-i18n="save"', html)
+                self.assertLess(html.index('/i18n.js'), html.index('/app.js'))
+        with urllib.request.urlopen(self.base + "/i18n.js", timeout=5) as response:
+            self.assertEqual(response.status, 200)
+            self.assertIn("text/javascript", response.headers["Content-Type"])
+            script = response.read().decode()
+            self.assertIn("navigator.languages", script)
+            self.assertIn('"en":', script)
+            self.assertIn('"zh":', script)
+
     def test_put_validates_then_saves(self):
         _, body = self.req("/api/policy")
         bad = copy.deepcopy(body["policy"])

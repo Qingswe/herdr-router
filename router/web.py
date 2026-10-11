@@ -32,7 +32,7 @@ from .classify import assess, parse_overrides
 from .score import NoAgentAvailable, decide, rank_at, territory
 
 WEB_ROOT = model.REPO_ROOT / "web"
-STATIC = {"/": "index.html", "/index.html": "index.html", "/app.js": "app.js", "/style.css": "style.css"}
+STATIC = {"/": "index.html", "/index.html": "index.html", "/app.js": "app.js", "/i18n.js": "i18n.js", "/style.css": "style.css"}
 MIME = {".html": "text/html; charset=utf-8", ".js": "text/javascript; charset=utf-8",
         ".css": "text/css; charset=utf-8"}
 MAX_BODY = 1 << 20

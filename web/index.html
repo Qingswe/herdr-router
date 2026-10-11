@@ -1,5 +1,5 @@
 <!doctype html>
-<html lang="zh-CN">
+<html lang="en">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
@@ -16,22 +16,23 @@
     <span class="muted mono" id="source"></span>
   </div>
   <div class="actions">
-    <span class="dirty" id="dirty" hidden>未保存</span>
-    <button id="btn-revert" class="ghost" title="放弃全部未保存的修改，恢复到上次保存的配置">放弃修改</button>
-    <button id="btn-defaults" class="ghost" title="把编辑器内容换成内置默认值（仍需保存）">默认值</button>
-    <button id="btn-save" class="primary" title="保存（⌘S）">保存</button>
+    <span class="dirty" id="dirty" hidden data-i18n="unsaved">Unsaved</span>
+    <button id="btn-revert" class="ghost" data-i18n-title="discard_title" title="Discard all unsaved changes" data-i18n="discard_changes">Discard changes</button>
+    <button id="btn-defaults" class="ghost" data-i18n-title="defaults_title" title="Load built-in defaults" data-i18n="defaults">Defaults</button>
+    <button id="btn-save" class="primary" data-i18n-title="save_title" title="Save (⌘/Ctrl+S)" data-i18n="save">Save</button>
   </div>
 </header>
-<nav class="tabs" id="tabs" aria-label="配置编辑器视图">
-  <button data-tab="chart" class="on">路由图</button>
-  <button data-tab="dims">维度</button>
-  <button data-tab="trial">试运行</button>
-  <button data-tab="settings">设置</button>
-  <button data-tab="json">JSON</button>
+<nav class="tabs" id="tabs" data-i18n-aria-label="editor_views" aria-label="Configuration editor views">
+  <button data-tab="chart" class="on" data-i18n="routing_map">Routing map</button>
+  <button data-tab="dims" data-i18n="dimensions">Dimensions</button>
+  <button data-tab="trial" data-i18n="try_routing">Try routing</button>
+  <button data-tab="settings" data-i18n="settings">Settings</button>
+  <button data-tab="json" data-i18n="json">JSON</button>
 </nav>
 <div id="errors" class="errors" role="alert" hidden></div>
-<main id="main" aria-label="路由配置工作区"><p class="muted pad" role="status">加载中…</p></main>
+<main id="main" data-i18n-aria-label="workspace" aria-label="Routing configuration workspace"><p class="muted pad" role="status" data-i18n="loading">Loading…</p></main>
 <div id="toast" class="toast" role="status" aria-live="polite" hidden></div>
+<script src="/i18n.js"></script>
 <script src="/app.js"></script>
 </body>
 </html>

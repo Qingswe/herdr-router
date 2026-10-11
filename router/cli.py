@@ -44,6 +44,17 @@ def route_task(task: str, policy: dict, *, profile=None, kind=None, model_=None,
                   kind=kind, model=model_, effort=effort)
 
 
+# Keep the existing terminal copy centralized; policy dimension labels are data.
+RENDER_LABELS = {
+    "source": "判断来源",
+    "selection": "选择",
+    "reason": "原因",
+    "decision_model": "决策模型",
+    "launch_args": "启动参数",
+    "low_confidence": "低置信度→难度上调",
+    "keyword_fallback": "不可用，已用关键词规则",
+}
+
 _BARS = " ▁▂▃▄▅▆▇█"
 
 
@@ -55,8 +66,8 @@ def render(d: Decision, policy: dict, top: int = 3, width: int | None = None) ->
     a = d.assessment
     conf = f"{a['source']}, confidence {a['confidence']}"
     if a.get("bumped"):
-        conf += ", 低置信度→难度上调"
-    rows = [("判断来源", conf)]
+        conf += ", " + RENDER_LABELS["low_confidence"]
+    rows = [(RENDER_LABELS["source"], conf)]
     for dim in model.dimensions(policy):
         dist = a["dists"].get(dim["id"])
         if not dist:
@@ -68,16 +79,16 @@ def render(d: Decision, policy: dict, top: int = 3, width: int | None = None) ->
         else:
             best = max(dist, key=dist.get)
             rows.append((dim.get("label", dim["id"]), f"{best} ({dist[best]:.2f})"))
-    rows.append(("选择", f"{d.profile_label} [{d.profile_id}]  →  {d.summary}"))
-    rows.append(("原因", d.reason))
+    rows.append((RENDER_LABELS["selection"], f"{d.profile_label} [{d.profile_id}]  →  {d.summary}"))
+    rows.append((RENDER_LABELS["reason"], d.reason))
     for i, r in enumerate(d.ranking[:top], 1):
         parts = ", ".join(f"{k}={v}" for k, v in r["breakdown"].items() if v)
         flag = "" if r["available"] else f"  ✗ {r['why_unavailable']}"
         rows.append((f"#{i}", f"{r['profile_id']:<18} {r['total']:<6} ({parts or '0'}){flag}"))
     if err := a.get("details", {}).get("systemone_error"):
-        rows.append(("决策模型", f"不可用，已用关键词规则 ({err[:60]})"))
+        rows.append((RENDER_LABELS["decision_model"], f"{RENDER_LABELS['keyword_fallback']} ({err[:60]})"))
     native = " ".join(shlex.quote(x) for x in d.args)
-    rows.append(("启动参数", f"--kind {d.kind}" + (f" -- {native}" if native else "")))
+    rows.append((RENDER_LABELS["launch_args"], f"--kind {d.kind}" + (f" -- {native}" if native else "")))
     if not width:
         return "\n".join(f"{_pad(k, 9)}{v}" for k, v in rows)
     return "\n".join(_wrap(f"{_pad(k, 9)}{v}", width, 9) for k, v in rows)
