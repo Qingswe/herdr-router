@@ -1,0 +1,417 @@
+{
+  "recorded_at": "2026-10-11T17:35:12+08:00",
+  "date": "2026-10-11",
+  "git_head": "54feb71e09dfa0f2b330f433d43eef67848d7100",
+  "working_tree_source_change": "web/style.css",
+  "sources": {
+    "web/index.html": {
+      "sha256": "bc88419e472e19bdb994bba0450795b29416bf4e4e2e8c56d265933babd56f57",
+      "bytes": 1896
+    },
+    "web/app.js": {
+      "sha256": "1173c300c467c2db37e5270262cdaada1f6f5d60fa866a56586c18a8d1677e88",
+      "bytes": 92076
+    },
+    "web/i18n.js": {
+      "sha256": "72a00f8fb58e2908f926cd0bf54ae393787b7b20cedc3b03757c17fc3c56de89",
+      "bytes": 36086
+    },
+    "web/style.css": {
+      "sha256": "13f5f73ba40dce627e10f2fa0607884550169c1af1209cd7b79d48d954afa320",
+      "bytes": 30574
+    },
+    "tests/test_frontend.js": {
+      "sha256": "6bd0bff4fde28b4173bca26253e8594bd2a3e7af341e7717dcbbca4737c70409",
+      "bytes": 33784
+    }
+  },
+  "browser": {
+    "name": "Google Chrome for Testing",
+    "version": "143.0.7499.4",
+    "interaction": "Native CUA only; DevTools Responsive mode and native screenshot commands",
+    "device_pixel_ratio": 2,
+    "ui_language": "zh-CN",
+    "viewports_css_px": [
+      {
+        "width": 1360,
+        "height": 900
+      },
+      {
+        "width": 390,
+        "height": 844
+      }
+    ]
+  },
+  "isolation": {
+    "server": "127.0.0.1:8797",
+    "config_directory": "/private/tmp/router-ui-acceptance-20261011/config",
+    "state_directory": "/private/tmp/router-ui-acceptance-20261011/state",
+    "user_chrome_used": false,
+    "user_policy_changed": false,
+    "cleanup": {
+      "test_browser_closed": true,
+      "browser_verification": "CUA app inventory no longer contained Google Chrome for Testing",
+      "test_server_closed": true,
+      "server_exit_code": 0,
+      "server_verification": "lsof -nP -iTCP:8797 -sTCP:LISTEN returned no listener"
+    }
+  },
+  "layout_measurements": [
+    {
+      "tab": "路由图",
+      "inner_width": 1360,
+      "inner_height": 900,
+      "document_scroll_width": 1360,
+      "body_scroll_width": 1360,
+      "table_scroll_containers": [
+        {
+          "client_width": 514,
+          "scroll_width": 520
+        }
+      ]
+    },
+    {
+      "tab": "维度",
+      "inner_width": 1360,
+      "inner_height": 900,
+      "document_scroll_width": 1360,
+      "body_scroll_width": 1360,
+      "table_scroll_containers": []
+    },
+    {
+      "tab": "试运行",
+      "inner_width": 1360,
+      "inner_height": 900,
+      "document_scroll_width": 1360,
+      "body_scroll_width": 1360,
+      "table_scroll_containers": [
+        {
+          "client_width": 514,
+          "scroll_width": 520
+        }
+      ]
+    },
+    {
+      "tab": "设置",
+      "inner_width": 1360,
+      "inner_height": 900,
+      "document_scroll_width": 1360,
+      "body_scroll_width": 1360,
+      "table_scroll_containers": [
+        {
+          "client_width": 532,
+          "scroll_width": 532
+        }
+      ]
+    },
+    {
+      "tab": "JSON",
+      "inner_width": 1360,
+      "inner_height": 900,
+      "document_scroll_width": 1360,
+      "body_scroll_width": 1360,
+      "table_scroll_containers": []
+    },
+    {
+      "tab": "路由图",
+      "inner_width": 390,
+      "inner_height": 844,
+      "document_scroll_width": 390,
+      "body_scroll_width": 390,
+      "table_scroll_containers": [
+        {
+          "client_width": 290,
+          "scroll_width": 520
+        }
+      ]
+    },
+    {
+      "tab": "维度",
+      "inner_width": 390,
+      "inner_height": 844,
+      "document_scroll_width": 390,
+      "body_scroll_width": 390,
+      "table_scroll_containers": []
+    },
+    {
+      "tab": "试运行",
+      "inner_width": 390,
+      "inner_height": 844,
+      "document_scroll_width": 390,
+      "body_scroll_width": 390,
+      "table_scroll_containers": [
+        {
+          "client_width": 290,
+          "scroll_width": 520
+        }
+      ]
+    },
+    {
+      "tab": "设置",
+      "inner_width": 390,
+      "inner_height": 844,
+      "document_scroll_width": 390,
+      "body_scroll_width": 390,
+      "table_scroll_containers": [
+        {
+          "client_width": 324,
+          "scroll_width": 324
+        }
+      ]
+    },
+    {
+      "tab": "JSON",
+      "inner_width": 390,
+      "inner_height": 844,
+      "document_scroll_width": 390,
+      "body_scroll_width": 390,
+      "table_scroll_containers": []
+    }
+  ],
+  "narrow_diagnostics_drag": {
+    "inner_width": 390,
+    "inner_height": 844,
+    "document_scroll_width": 390,
+    "page_scroll_x": 0,
+    "container_client_width": 290,
+    "table_scroll_width": 520,
+    "container_scroll_left": 230,
+    "diagnostics_open": true
+  },
+  "workflow_results": {
+    "evaluation": "keyword; Jev disabled",
+    "task": "修复登录偶现的崩溃，原因不明\n附上复现步骤与约束，保持现有行为。",
+    "winner": {
+      "profile": "sol-medium",
+      "penalty": 0.2091,
+      "difficulty": 0.035,
+      "cost": 0.126,
+      "time": 0.0481
+    },
+    "runner_up_penalty": 0.2508,
+    "penalty_gap": 0.0417,
+    "command_copy_feedback_seen": true,
+    "agent_command_executed": false,
+    "profile_search": {
+      "query": "Sol",
+      "matching": 7,
+      "total": 34,
+      "enabled_matching": 4
+    },
+    "slider_undo_redo_buttons": {
+      "before": 2.57,
+      "after": 3.57
+    },
+    "successful_save": true,
+    "invalid_save": {
+      "field": "scoring.under_penalty",
+      "value": -1,
+      "http_status": 422,
+      "dirty_state_retained": true
+    },
+    "discard_restored": {
+      "field": "scoring.under_penalty",
+      "value": 4,
+      "draft_clean": true
+    }
+  },
+  "checks": [
+    {
+      "command": "PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s tests -t .",
+      "passed": 197,
+      "result": "pass"
+    },
+    {
+      "command": "node tests/test_frontend.js",
+      "passed": 32,
+      "result": "pass"
+    },
+    {
+      "command": "node --check web/app.js",
+      "result": "pass"
+    },
+    {
+      "command": "node --check web/i18n.js",
+      "result": "pass"
+    },
+    {
+      "command": "git diff --check",
+      "result": "pass"
+    }
+  ],
+  "artifact_notes": [
+    "Native DevTools PNG output; dimensions are device pixels at DPR 2.",
+    "Before and after screenshots use different editor/task states; compare the specific layout defects, not every pixel.",
+    "Full-page screenshots taken after scrolling may place the sticky header at the capture scroll offset. The desktop diagnostic viewport screenshot preserves visible placement.",
+    "mobile-diagnostics-scroll.png captures the diagnostic table panned right inside its container."
+  ],
+  "scope_limits": [
+    "Chromium only; 390px is viewport emulation, not a physical phone.",
+    "No live Jev evaluation, populated history, manual profile dragging or harness switching in this browser pass.",
+    "Undo/redo buttons verified; native keyboard undo/redo shortcuts not counted as verified."
+  ],
+  "artifacts": [
+    {
+      "file": "desktop-chart-before.png",
+      "width_px": 2720,
+      "height_px": 8426,
+      "bytes": 1647672,
+      "sha256": "89f4654fe0ccca200ad2204f13e56c0680d46af674af80a947be98b96993b9c7",
+      "stage": "before_css_fixes",
+      "capture": "full_page"
+    },
+    {
+      "file": "desktop-chart-editor.png",
+      "width_px": 2720,
+      "height_px": 5954,
+      "bytes": 1277734,
+      "sha256": "1aeb78178c460997d2306d8d46a737ebfacd979c81162c6f9e99de187936bdef",
+      "stage": "after_css_fixes",
+      "capture": "full_page"
+    },
+    {
+      "file": "desktop-diagnostics-viewport.png",
+      "width_px": 2720,
+      "height_px": 1800,
+      "bytes": 373917,
+      "sha256": "5358f758818cddf22f1ae46c1a5658bcf860830188ffc685e7517a442eb4aac4",
+      "stage": "after_css_fixes",
+      "capture": "viewport"
+    },
+    {
+      "file": "desktop-diagnostics.png",
+      "width_px": 2720,
+      "height_px": 6194,
+      "bytes": 1186459,
+      "sha256": "bfcabbc451330089379cb51bda4780ea20e0d11b8f7327b7e1615ec882b150b0",
+      "stage": "after_css_fixes",
+      "capture": "full_page"
+    },
+    {
+      "file": "desktop-dimensions.png",
+      "width_px": 2720,
+      "height_px": 4964,
+      "bytes": 864413,
+      "sha256": "2621687c5c6a0b4a6262d6d259272298364db350b38dd7ccb81f1e72de16eb8d",
+      "stage": "after_css_fixes",
+      "capture": "full_page"
+    },
+    {
+      "file": "desktop-json.png",
+      "width_px": 2720,
+      "height_px": 2152,
+      "bytes": 353797,
+      "sha256": "297f2b4ad4ec4816dc8fa3ad85232abc6244a20a07036487a565b8421b19bb2a",
+      "stage": "after_css_fixes",
+      "capture": "full_page"
+    },
+    {
+      "file": "desktop-settings.png",
+      "width_px": 2720,
+      "height_px": 3290,
+      "bytes": 682496,
+      "sha256": "8e7cd59f3ffe6359a1aba3544af6111b3447ee0d04cddf1cdf5b84e616fef501",
+      "stage": "after_css_fixes",
+      "capture": "full_page"
+    },
+    {
+      "file": "desktop-trial.png",
+      "width_px": 2720,
+      "height_px": 2436,
+      "bytes": 417937,
+      "sha256": "b6f8699727dea3aedfad843c50f5e765deafb63dd447dd1d9859c6af4896ef08",
+      "stage": "after_css_fixes",
+      "capture": "full_page"
+    },
+    {
+      "file": "mobile-chart-editor.png",
+      "width_px": 780,
+      "height_px": 9596,
+      "bytes": 879729,
+      "sha256": "e8f43568441cb7c55413253f222afedb42773b8ca3977164f66b129d58968e7a",
+      "stage": "after_css_fixes",
+      "capture": "full_page"
+    },
+    {
+      "file": "mobile-diagnostics-before.png",
+      "width_px": 780,
+      "height_px": 9764,
+      "bytes": 998167,
+      "sha256": "be82f36ee22bde2826a7e3f6bf30bb1cb26cb02d785faf038fd96add2e5713c0",
+      "stage": "before_css_fixes",
+      "capture": "full_page"
+    },
+    {
+      "file": "mobile-diagnostics-scroll.png",
+      "width_px": 780,
+      "height_px": 8012,
+      "bytes": 743172,
+      "sha256": "6695b03ce86ae3c98b0cd813fa067f6adcc0829e12022c5a9a1abfe2314e5f0c",
+      "stage": "after_css_fixes",
+      "capture": "full_page"
+    },
+    {
+      "file": "mobile-diagnostics.png",
+      "width_px": 780,
+      "height_px": 8012,
+      "bytes": 797672,
+      "sha256": "f4a787b7ec42273bb59d42c483a639d1c5786529d32fa1e087eb5ae7a8e6e1b3",
+      "stage": "after_css_fixes",
+      "capture": "full_page"
+    },
+    {
+      "file": "mobile-dimensions.png",
+      "width_px": 780,
+      "height_px": 7568,
+      "bytes": 636151,
+      "sha256": "1c4b66aa863a19ccaa7b45302af980dfe254f77b3ade1ebfcbb8710ad5fdd89a",
+      "stage": "after_css_fixes",
+      "capture": "full_page"
+    },
+    {
+      "file": "mobile-json.png",
+      "width_px": 780,
+      "height_px": 2566,
+      "bytes": 245472,
+      "sha256": "b1bb70b47db69c3e79aa2e12da6712902e564748d8653f891e6bb6965b0f7d1f",
+      "stage": "after_css_fixes",
+      "capture": "full_page"
+    },
+    {
+      "file": "mobile-save-error.png",
+      "width_px": 780,
+      "height_px": 8194,
+      "bytes": 652348,
+      "sha256": "562c4841c6934400016c9b267b35fc3ec4bdd939f1736627ef80a9629e7404ba",
+      "stage": "after_css_fixes",
+      "capture": "full_page"
+    },
+    {
+      "file": "mobile-settings.png",
+      "width_px": 780,
+      "height_px": 7856,
+      "bytes": 617036,
+      "sha256": "e44b9a02cb72e71d0c10b5686b9c090875f2e03edbee1a1ace27b29e9a70f71c",
+      "stage": "after_css_fixes",
+      "capture": "full_page"
+    },
+    {
+      "file": "mobile-trial-before.png",
+      "width_px": 780,
+      "height_px": 2974,
+      "bytes": 299727,
+      "sha256": "b09a141293062e4a858956d88b4e7e5dd5cd6980877abd2936b9bb2bee758f8f",
+      "stage": "before_css_fixes",
+      "capture": "full_page"
+    },
+    {
+      "file": "mobile-trial.png",
+      "width_px": 780,
+      "height_px": 2776,
+      "bytes": 297587,
+      "sha256": "94473f5e86db2c627e5cd14c5804e746fbfad95eb07c254f7ace54c9992b3d28",
+      "stage": "after_css_fixes",
+      "capture": "full_page"
+    }
+  ]
+}

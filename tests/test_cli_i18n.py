@@ -1,15 +1,18 @@
 """Terminal copy stays centralized without changing routing or policy labels."""
 
 import unittest
+from functools import partial
 from unittest import mock
 
 from router import cli, model
+from router.score import decide
 
 
 class RenderLabelsTest(unittest.TestCase):
     def test_render_uses_constants_and_preserves_dimension_labels(self):
         policy = model.load_default()
-        decision = cli.route_task("rename a variable", policy, use_backend=False)
+        with mock.patch.object(cli, "decide", partial(decide, which=lambda binary: f"/test/bin/{binary}")):
+            decision = cli.route_task("rename a variable", policy, use_backend=False)
         decision.assessment["bumped"] = True
         decision.assessment.setdefault("details", {})["systemone_error"] = "offline"
         before = cli.render(decision, policy)

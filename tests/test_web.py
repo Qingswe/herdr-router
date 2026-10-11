@@ -6,7 +6,9 @@ import threading
 import unittest
 import urllib.error
 import urllib.request
+from functools import partial
 from http.server import ThreadingHTTPServer
+from pathlib import Path
 from unittest import mock
 
 from router import model, web
@@ -15,6 +17,14 @@ from router import model, web
 class WebApiTest(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
+        # API/scoring tests simulate installed CLIs and never discover real accounts/models.
+        available = lambda binary: f"/test/bin/{binary}"
+        for name in ("decide", "rank_at", "territory"):
+            cls.enterClassContext(mock.patch.object(web, name, partial(getattr(web, name), which=available)))
+        cls.enterClassContext(mock.patch.object(web, "_installed_kinds",
+                                               return_value={kind: True for kind in model.KNOWN_KINDS}))
+        for name in ("codex_models", "cursor_models", "opencode_models"):
+            cls.enterClassContext(mock.patch.object(web.catalog, name, return_value=[]))
         cls.tmp = tempfile.TemporaryDirectory()
         cls.env = mock.patch.dict(os.environ, {"HERDR_PLUGIN_CONFIG_DIR": f"{cls.tmp.name}/cfg",
                                                "HERDR_PLUGIN_STATE_DIR": f"{cls.tmp.name}/state"})
@@ -130,6 +140,22 @@ class WebApiTest(unittest.TestCase):
             status, out = self.req("/api/models")
         self.assertEqual(status, 200)
         self.assertIn("opus", [m["id"] for m in out["models"]["claude"]])
+
+
+class EditorStartupTest(unittest.TestCase):
+    def test_first_launch_creates_state_directory_and_returns_authenticated_url(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            state = Path(tmp) / "new-state"
+            with mock.patch.dict(os.environ, {"HERDR_PLUGIN_STATE_DIR": str(state)}), \
+                    mock.patch.object(web, "running_info", side_effect=[None, {"port": 8798}]), \
+                    mock.patch.object(web.subprocess, "Popen") as launch, \
+                    mock.patch.object(web.time, "sleep"):
+                url = web.ensure_running(port=8798)
+                self.assertEqual(url, f"http://127.0.0.1:8798/?token={web.get_token()}")
+                launch.assert_called_once()
+                self.assertEqual(launch.call_args.args[0][-2:], ["--port", "8798"])
+                self.assertTrue((state / "ui.log").is_file())
+                self.assertTrue(launch.call_args.kwargs["stdout"].closed)
 
 
 if __name__ == "__main__":

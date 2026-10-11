@@ -369,9 +369,11 @@ def ensure_running(port: int = DEFAULT_PORT) -> str:
     """Start a background editor server if none answers; return its tokenised URL."""
     info = running_info()
     if not info:
-        log = (model.state_dir() / "ui.log").open("a")
-        subprocess.Popen([sys.executable, str(model.REPO_ROOT / "bin" / "herdr-router"), "ui", "--port", str(port)],
-                         stdout=log, stderr=log, stdin=subprocess.DEVNULL, start_new_session=True)
+        state = model.state_dir()
+        state.mkdir(parents=True, exist_ok=True)
+        with (state / "ui.log").open("a") as log:
+            subprocess.Popen([sys.executable, str(model.REPO_ROOT / "bin" / "herdr-router"), "ui", "--port", str(port)],
+                             stdout=log, stderr=log, stdin=subprocess.DEVNULL, start_new_session=True)
         for _ in range(50):
             time.sleep(0.1)
             if info := running_info():
