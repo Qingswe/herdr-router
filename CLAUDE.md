@@ -45,6 +45,7 @@ router/
   herdr.py      herdr CLI 的薄封装（全部走 subprocess + JSON）
   dispatch.py   Decision → prepare / name → split pane → start → 确认送达 → 可选 wait → 终态日志
   sessions.py   Session 持久化、短事务 checkpoint、父子关联与只读查询
+  workspace.py 按需 worktree 预检/创建/身份复查；默认 shared 不调用 Git
   log.py        decisions.jsonl 追加（失败静默）
   cli.py        argparse 子命令、终端渲染、popup、插件 action
   web.py        本地网页服务（ThreadingHTTPServer）
@@ -87,6 +88,10 @@ herdr pane split → herdr agent start <name> --kind K --pane P -- <args> → he
 `dispatch()` 在 prepare 前创建 Session（id = dispatch_id），关键执行边界独立提交 checkpoint，事务不能跨 Herdr RPC。发送前先存 `prompt/unknown`；这一写入失败时不调用 prompt，实际输出保持 `not_sent`。确认后的 checkpoint 和最后存储失败不能遮蔽原异常或已确认送达，也不能跳过用户要求的 wait，输出附带 `session_warning`；锁竞争用 `session_store_busy` 区分其他存储错误。`in_progress` 仅表示缺少终态，不能用它断言 agent 当前工作或任务成功；不靠 PID 猜完成，不自动恢复/重发。
 
 `session list/show` 不加载 policy、不调用 Herdr、不创建不存在的数据库。`dispatch --session <parent> --handoff <file>` 是新 pane/新尝试，通过 parent_id 关联，继承并验证同一 realpath cwd；前一 agent 的对话不会自动复制。父尝试必须 confirmed，但这不证明前一任务完成；交接前先人工检查结果。handoff 普通 UTF-8 文件最多 48KiB，保留正文快照；只用新 task 路由，`decide()` 后再拼交接（防止摘要里的 @alias/!override 改路由或流入 Jev），最终 prompt 最多 64KiB。网页不读取 Session、不能派发。
+
+隔离按需选择：新任务默认 shared，零 Git 扫描；CLI `--isolation worktree` 才预检与创建。路由前拍 committed HEAD/状态快照，路由后复查，超时预算覆盖两轮检查与实际检出，不包含评估模型。新树要干净源库，拒绝未提交/未跟踪内容、bare/unborn、sparse/submodule、基线不存在的子目录。正常 hooks/filter 照常执行，不额外装依赖或复制 ignored 文件。清理继承 GIT_* 避免操作错误仓库。创建使用独立进程组，超时/中断停止 owned Git，保留已知状态与路径，不自动 fallback/remove。
+
+顺序为 Session → workspace creating checkpoint → Git add → ready + 实际 cwd 原子持久化 → prepare/split/start；SQL 事务不跨 Git/Herdr。workspace JSON 扩展 directory/worktree，DDL/user_version=1 保留；旧版本解码器不能识别新 worktree 行。续接只复用父隔离，校验 path/toplevel/common_dir/branch 与注册，不扫状态、不比较 base_head 与当前 HEAD（正常提交可前进）。现有未提交编辑保留。workspace metadata 纯 shape 校验不查文件系统，set_workspace 只在 in_progress/not_sent 时允许调整同一尝试的身份和 cwd。
 
 ### 打分公式（score.penalty，越低越好）
 
@@ -187,6 +192,7 @@ p=model.load(); print(json.dumps(classify.systemone_request('把这个变量重�
 - **不要**尝试读取 / 导出 opencode 的凭据（`opencode auth export` 之类）——免费模型不需要，这类操作会被权限系统拒绝。
 
 **dispatch 失败**
+- worktree 数据库回滚：新代码兼容旧 directory 行；旧代码不识别 worktree 行，存在这些行时旧版 `session list` 会报错。通过 symlink 运行本仓库时，切回旧提交也会触发这一限制；数据库备份应与代码版本配套，不能删库重建。
 - `not_in_herdr`：不在 Herdr pane 里（`HERDR_ENV` 不是 1）。
 - `agent_not_ready`：agent 启动时被弹窗卡住（比如信任目录对话框），pane 和名字仍然存活，用 `herdr agent read <name>` 看界面，**问用户**再决定按什么键。
 - 档位"not on PATH"：`policy.env.extra_path` 会在启动时追加到 PATH；`binaries` 把 kind 映射到实际可执行名（cursor → cursor-agent）。

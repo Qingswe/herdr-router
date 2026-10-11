@@ -43,7 +43,13 @@ CLI 增加 session list/show（只读，不加载 policy、不联系 Herdr）；
 
 ### 第三阶段：worktree 隔离
 
-交接依赖文件及显式摘要，不假设读取了前一 agent 的全部对话。worktree 创建前检查仓库和工作区状态，路由后再次验证 HEAD 与状态，生成不含任务正文的分支名与路径，后续 session 复用并校验同一 worktree。失败保留目录，不自动 merge/push/delete。
+用户明确：不同仓库创建成本不同，可能反效果，因此按需创建。新任务默认 shared，不扫描 Git；只有 `--isolation worktree` 才进行预检与创建。dry-run 展示计划，不创建 Session/branch/path。不猜仓库大小对应的耗时；Git 准备总预算默认 60 秒、可逐次调整，排除评估模型耗时，记录实际 creation_ms（含正常 hooks/filter）。不额外安装依赖、复制缓存/ignored 本地资产。
+
+新建检查 committed HEAD、干净 tracked/untracked 源库，路由后复查 HEAD/ref/status。status 共两次；持久化 callback 后只复查身份，创建后只验证身份与 HEAD，不重复扫描 status/索引。目录/分支基于 canonical common-dir hash 与 dispatch UUID，不含任务文本，目标必须在源库之外；保留源子目录，预先确认在基线提交中存在。最小版拒绝 bare/unborn/sparse/submodules。Git 环境清除继承 GIT_*，不刷新源索引，所有调用受统一时限约束。
+
+Session 先写计划 creating，再 Git worktree add（独立进程组），ready 与实际 cwd 持久化成功后才 prepare/split/start。检出启动后超时/中断停止 owned 子进程组，状态 unknown；启动前则 failed。失败保留已知 path/branch/state，不自动重试、fallback/shared、merge/push/delete。SQL 事务不跨 Git/Herdr，已有 SQLite v1 的 workspace JSON 增加新 kind，旧 directory 数据保持可读，不改 DDL。
+
+续接沿用父隔离，不支持中途切换。worktree 默认复用原 path/repo/branch、允许已有修改和正常提交；身份校验不扫描 dirty 文件、不要求 HEAD 等于最初 base_head。需变更隔离时用新任务加显式 handoff，不关联原 parent。失败记录不能作为 ready 续接。回退到旧代码时新 worktree 行不被旧解码器识别，应将数据库备份与代码版本配套。
 
 live effort、跨机器协调与网页派发暂不纳入这些最小阶段。后续若实现 live effort，必须单独设计身份验证、输入框保护和重复发送边界。
 
@@ -85,3 +91,11 @@ Opus 最终复查未发现约定范围内的阻断问题，并验证了真实只
 第二阶段边界：尚不复制原 agent 的完整会话、不复用旧 pane、不创建 worktree、不推断任务验收通过；同一 cwd 的续接应先检查前一任务已结束。数据库保存最后已提交的 checkpoint；缺少终态和送达 unknown 都不能据此自动重发。
 
 Opus 最终只读复查未发现阻断错误，独立验证确认后 busy 仍继续 wait、warning 在终态更新恢复后仍保留、损坏库保持原样、意外异常的 JSON 保留送达与位置字段，并在隔离目录再次验证全部 157 个测试通过。
+
+第三阶段实现：router 使用显式本地规则评估（`--no-systemone`），选择 `sol-medium`（GPT-6.1 Sol / medium）实现 workspace 与测试；主代理集成 CLI、Session、dispatch 与文档，Opus 负责设计及只读复查。按用户要求不为协作 worker 额外创建 worktree，worker 文件职责与主代理分开。
+
+第三阶段验证：Python 全套 195 个测试通过，前端 26 个测试通过。新增测试使用真实的小型临时 Git 仓库，验证共享模式零 Git、独立修改不影响源库、子目录保留、dirty/已提交 worktree 续接复用、源库变更、分支冲突、正常 hooks、filter 失败、时限耗尽和中断停止 owned 进程组；Herdr 调用在本阶段集成测试中使用 mock。验证 creating 持久化早于 Git、ready 持久化早于启动、数据库无跨 Git 长事务，以及失败 Session/错误/日志保留路径与状态。第一、二阶段的真实 Herdr 验证保持适用，本阶段没有额外创建真实冒烟 pane。
+
+第三阶段边界：干净源库的两次状态扫描和检出仍有成本，因此始终显式 opt-in；不会猜测体积阈值或准备耗时，也不复制 ignored 资产、运行额外依赖安装。继承仓库配置的 hooks/filter 可能访问网络；公开错误不附原始 stderr（可含凭证），以错误码及检出/hooks/filter/存储诊断方向辅助排查。进程被强杀或机器掉电仍可能留下 creating，不能据此推断是否检出完成或自动重试。
+
+Opus 最终只读复查未发现阻断。前轮提出的时限硬上限、重复扫描、分支前缀冲突与 pane 恢复提示已修复；主代理也处理其最终提醒：持久化 callback 失败明确标 failed、不干净源库先拒绝再读全索引、文档明确 planned checkpoint 在 `git worktree add` 之前。最后两项实现调整后重新验证 workspace/dispatch 集成测试。

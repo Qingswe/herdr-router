@@ -76,6 +76,19 @@ Before continuing, inspect the prior result and confirm its work has finished. C
 
 `in_progress` means no terminal state was recorded, including after a crash; it is not evidence of a live agent. A `session_warning` means the final storage update failed, while `prompt_status` still describes actual delivery. Inspect the original pane/log and never retry automatically.
 
+## Optional isolation
+
+New tasks use `shared` by default without Git scans. Choose a worktree only when independent edits justify checkout/setup time:
+
+```bash
+herdr-router dispatch "<task>" --isolation worktree --dry-run --json
+herdr-router dispatch "<task>" --isolation worktree --worktree-timeout 180000 --json
+```
+
+Creation needs committed HEAD and a clean tracked/untracked source; sparse checkout/submodules are unsupported. The budget covers Git inspection/checkout, excluding assessment (default 60000 ms). Normal checkout hooks/filters can add time or network access; ignored local assets and dependencies are not copied. Dry-run creates nothing, and creation times are measured rather than guessed.
+
+Sessions inherit isolation: worktree continuations reuse the same path/branch, accepting prior edits and commits. Do not switch isolation mid-session; use a fresh task with handoff when needed. On failure inspect `workspace.path`, `branch`, `state` and the original Session. The router retains known artifacts and stops owned Git processes on timeout; it never retries, falls back to shared, merges, pushes or deletes automatically.
+
 ## Tuning
 
 Profiles and dimensions live in a policy the user edits in a web UI (`herdr-router ui`, or the Herdr action `herdr-router.open-editor`). If the user disagrees with a routing choice, point them there rather than overriding silently.

@@ -17,6 +17,7 @@ import time
 import uuid
 
 from .model import state_dir
+from . import workspace as workspaces
 
 
 SCHEMA_VERSION = 1
@@ -134,7 +135,7 @@ def _decode(row: sqlite3.Row) -> dict:
             and _handoff(record["handoff"]) and isinstance(record["decision"], dict)
             and isinstance(record["decision"].get("prompt"), str)
             and _path(record["cwd"])
-            and record["workspace"] == {"kind": "directory", "cwd": record["cwd"]}
+            and workspaces.validate_metadata(record["workspace"], record["cwd"])
             and type(record["created_at"]) is int and record["created_at"] >= 0
             and type(record["updated_at"]) is int
             and record["updated_at"] >= record["created_at"]
@@ -239,7 +240,8 @@ def _get(conn: sqlite3.Connection | None, session_id: str) -> dict:
 
 
 def create(session_id: str, *, decision: dict, cwd: str, parent_id: str | None = None,
-           phase: str = "task", task: str | None = None, handoff: dict | None = None) -> dict:
+           phase: str = "task", task: str | None = None, handoff: dict | None = None,
+           workspace: dict | None = None) -> dict:
     """Snapshot one new attempt; continuation only links to a confirmed parent."""
     try:
         if (not _id(session_id) or (parent_id is not None and not isinstance(parent_id, str))
@@ -268,6 +270,10 @@ def create(session_id: str, *, decision: dict, cwd: str, parent_id: str | None =
             directory = False
         if not directory:
             raise SessionError("invalid_cwd", "session cwd must be an existing directory")
+        if workspace is None:
+            workspace = {"kind": "directory", "cwd": cwd}
+        if not workspaces.validate_metadata(workspace, cwd):
+            raise _invalid()
         if conn.execute("SELECT 1 FROM sessions WHERE id = ?", (session_id,)).fetchone():
             raise SessionError("session_exists", "session already exists")
         if parent_id is not None:
@@ -278,12 +284,48 @@ def create(session_id: str, *, decision: dict, cwd: str, parent_id: str | None =
                 raise SessionError("session_cwd_mismatch", "continuation must use the parent directory")
             if handoff is None:
                 raise SessionError("handoff_required", "continuation requires a handoff snapshot")
+            if workspace != parent["workspace"]:
+                raise SessionError("workspace_isolation_conflict", "continuation must preserve the parent workspace")
         now = time.time_ns() // 1_000_000
         values = (SCHEMA_VERSION, session_id, session_id, parent_id, phase, task,
-                  handoff_json, decision_json, cwd, _json({"kind": "directory", "cwd": cwd}),
+                  handoff_json, decision_json, cwd, _json(workspace),
                   now, now, "prepare", "in_progress", "not_sent", None, None, None, os.getpid())
         conn.execute(f"INSERT INTO sessions ({_COLUMNS}) VALUES ({', '.join('?' for _ in values)})",
                      values)
+        return _get(conn, session_id)
+
+
+def set_workspace(session_id: str, workspace: dict) -> dict:
+    """Persist planned/ready isolation before launch, atomically with its cwd."""
+    cwd = workspace.get("cwd") if isinstance(workspace, dict) else None
+    if not workspaces.validate_metadata(workspace, cwd):
+        raise _invalid()
+    encoded = _json(workspace)
+    try:
+        encoded.encode("utf-8")
+    except UnicodeError:
+        raise _invalid() from None
+    with _transaction(write=True) as conn:
+        record = _get(conn, session_id)
+        if record["status"] != "in_progress" or record["prompt_status"] != "not_sent":
+            raise SessionError("session_invalid", "workspace can only change before task submission")
+        previous = record["workspace"]
+        if previous["kind"] == "directory":
+            source = workspace.get("source_cwd") if workspace["kind"] == "worktree" else cwd
+            if source != record["cwd"]:
+                raise SessionError("workspace_isolation_conflict", "workspace must originate from the attempt directory")
+        if previous["kind"] == "worktree":
+            identity = ("path", "branch", "common_dir", "source_root", "source_cwd", "relative_cwd", "base_head")
+            if workspace["kind"] != "worktree" or any(previous[k] != workspace[k] for k in identity):
+                raise SessionError("workspace_isolation_conflict", "worktree identity cannot change within an attempt")
+            if previous["state"] == "ready" and workspace["state"] != "ready":
+                raise SessionError("session_invalid", "a prepared workspace cannot revert to a creation state")
+        if record["parent_id"] is not None:
+            parent = _get(conn, record["parent_id"])
+            if workspace != parent["workspace"]:
+                raise SessionError("workspace_isolation_conflict", "continuation must preserve the parent workspace")
+        conn.execute("UPDATE sessions SET cwd = ?, workspace = ?, updated_at = ? WHERE id = ?",
+                     (cwd, encoded, max(record["updated_at"], time.time_ns() // 1_000_000), session_id))
         return _get(conn, session_id)
 
 

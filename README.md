@@ -83,13 +83,32 @@ herdr-router session show <session-id> --json
 herdr-router dispatch "检查第一阶段并继续实现" --session <session-id> --handoff handoff.md --phase review --json
 ```
 
-Continuation creates a **new Session and new pane**, linked by `parent_id`, and inherits the parent's working directory. An explicitly different `--cwd` is rejected. It requires a parent with confirmed delivery and an explicit UTF-8 handoff file; confirm that the prior work has finished before continuing in the shared directory. The earlier conversation is not automatically available. The handoff is copied into the record and prompt, so later edits to the source file do not change this attempt. Only the new task participates in assessment and inline overrides; the handoff is added after routing. A standalone `--handoff` is also supported for a fresh task.
+Continuation creates a **new Session and new pane**, linked by `parent_id`, and inherits the parent's working directory and isolation mode. An explicitly different `--cwd` or isolation mode is rejected. It requires a parent with confirmed delivery and an explicit UTF-8 handoff file; confirm that the prior work has finished before continuing in the same directory. The earlier conversation is not automatically available. The handoff is copied into the record and prompt, so later edits to the source file do not change this attempt. Only the new task participates in assessment and inline overrides; the handoff is added after routing. A standalone `--handoff` is also supported for a fresh task.
 
 Handoff files must be ordinary UTF-8 text files, at most 48 KiB; the final prompt is limited to 64 KiB. `--handoff -` is rejected because task stdin is a separate input. `--phase` is a nonempty label of up to 64 characters. `--dry-run` validates and previews the continuation without creating a Session or pane. Session inspection does not load the policy or contact Herdr.
 
 `status=in_progress` means the attempt has no terminal record; it does **not** prove an agent is currently running. A crash at the prompt boundary leaves `stage=prompt`, `prompt_status=unknown`. Inspection never retries or infers completion. Writes use short SQLite transactions and must succeed before starting or submitting work. After activity is confirmed, persistence failures preserve the delivery outcome, continue any requested wait, and report `session_warning`; inspect the original pane and the best-effort decision log. `session_store_busy` reports lock contention separately from other storage errors. A `confirmed` Session still does not prove the task succeeded.
 
 The staged roadmap and technology-stack assessment are in [plans/router-evolution.md](plans/router-evolution.md).
+
+## On-demand worktrees
+
+New tasks default to `shared`: use the given directory directly, with **no Git inspection or checkout**. Small edits, read-only research, and repositories with expensive checkout/setup can keep this default. Opt into a separate branch and working tree when independent edits justify that cost:
+
+```bash
+herdr-router dispatch "实现独立功能" --isolation worktree --dry-run --json
+herdr-router dispatch "实现独立功能" --isolation worktree --worktree-timeout 180000 --json
+# Later stages reuse the same worktree and branch; no additional checkout:
+herdr-router dispatch "复查实现" --session <session-id> --handoff handoff.md --phase review --json
+```
+
+`--dry-run` performs read-only preflight and displays `create`, `reuse`, or `shared`; it creates no Session, branch, or directory. There is no automatic size threshold or creation-time prediction. `--worktree-timeout` is the total Git preparation budget in milliseconds (default 60000), covering inspection, revalidation, checkout and verification, excluding model assessment. Adjust it per repository. Sessions retain measured `workspace.creation_ms`, including repository checkout hooks and filters; it is not an estimate for the next task.
+
+A new worktree requires a committed HEAD and a clean tracked/untracked source tree. The router records the baseline before assessment and rechecks it before creation. These two status scans also cost time on large repositories; continuation performs no status scan. Source subdirectories are preserved, and must exist in that commit. Sparse checkout, submodules, bare and unborn repositories are unsupported in this first version. Ignored assets, local caches, dependencies and environment files are not copied; the router runs no extra setup commands. Normal Git checkout hooks and filters still run, so creation can include network access and repository-specific setup time. Git itself shares repository data while maintaining separate working files and checkout state. [Git worktree documentation](https://git-scm.com/docs/git-worktree).
+
+Paths live under the state directory's `worktrees/<repository-hash>/<dispatch-id>`, outside the source repository. Branches are `router/<dispatch-id>`; neither name contains task text. An existing branch named `router` conflicts with this prefix and is rejected before creation. A Session stores the planned path before `git worktree add` and the prepared workspace before opening a pane. A timeout after checkout starts stops the owned Git process group and reports `workspace.state=unknown`, with known path and branch; failure before checkout starts records `failed`. Failure never falls back to shared execution, retries, merges, pushes or removes worktrees. Inspect the error/Session before handling any artifacts; Git itself may remove an incomplete checkout when interrupted.
+
+Continuation inherits isolation. A worktree parent reuses the same path, repository and branch, permitting existing edits and commits; it checks identity without rescanning dirty files. Changing branch, moving/removing the directory, or a non-ready workspace stops continuation. To change isolation, start a fresh task with an explicit handoff file instead of a parent Session. Worktree metadata uses the existing version-1 SQLite JSON column, preserving old directory records; code from before this feature cannot inspect new worktree records, so keep the database backup with the code version when rolling back.
 
 ## Web editor
 

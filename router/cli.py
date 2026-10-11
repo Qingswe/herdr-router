@@ -23,7 +23,7 @@ import time
 import unicodedata
 from pathlib import Path
 
-from . import PLUGIN_ID, __version__, agents, herdr, model, sessions
+from . import PLUGIN_ID, __version__, agents, herdr, model, sessions, workspace as workspaces
 from .classify import assess, parse_overrides
 from .dispatch import dispatch
 from .score import Decision, NoAgentAvailable, decide
@@ -130,8 +130,14 @@ def dispatch_recovery(e: herdr.HerdrError) -> str:
         return f"任务已确认送达，但等待结束失败。请查看 {location}，不要重新派发。"
     if status == "unknown":
         return f"任务可能已送达。请先查看 {location} 确认执行状态，不要直接重新派发。"
+    workspace = getattr(e, "workspace", None)
     if e.pane_id:
-        return f"任务未发送，{location} 仍保留。请处理该 pane 的启动或确认问题，再决定如何发送任务。"
+        suffix = (f" worktree 已准备好：{workspace['path']}（分支 {workspace['branch']}）。"
+                  if workspace and workspace.get("kind") == "worktree" and workspace.get("state") == "ready" else "")
+        return f"任务未发送，{location} 仍保留。请处理该 pane 的启动或确认问题，再决定如何发送任务。{suffix}"
+    if workspace and workspace.get("kind") == "worktree":
+        return (f"任务未发送。已记录 worktree 路径 {workspace['path']}、分支 {workspace['branch']}、"
+                f"状态 {workspace['state']}；请先检查创建结果，再处理该工作区。")
     return "任务未发送。请修正错误；若创建 pane 时发生通信错误，先检查 Herdr 是否已留下 pane。"
 
 
@@ -141,6 +147,8 @@ def dispatch_error(e: herdr.HerdrError, d: Decision | None = None) -> dict:
            "status": "failed", "prompt_status": getattr(e, "prompt_status", "not_sent"),
            "pane_id": e.pane_id, "agent": e.agent, "recovery": dispatch_recovery(e),
            "session_id": getattr(e, "session_id", None)}
+    if getattr(e, "workspace", None):
+        out["workspace"] = e.workspace
     if getattr(e, "session_warning", None):
         out["session_warning"] = e.session_warning
     if d is not None:
@@ -153,7 +161,7 @@ def public_dispatch_error(error: Exception) -> herdr.HerdrError:
     if isinstance(error, herdr.HerdrError):
         return error
     result = herdr.HerdrError("unexpected_error", "dispatch failed unexpectedly; inspect the recorded attempt")
-    for key in ("pane_id", "agent", "dispatch_id", "stage", "session_id", "session_warning"):
+    for key in ("pane_id", "agent", "dispatch_id", "stage", "session_id", "session_warning", "workspace"):
         setattr(result, key, getattr(error, key, None))
     result.prompt_status = getattr(error, "prompt_status", "unknown")
     return result
@@ -201,13 +209,14 @@ def read_handoff(path: Path) -> dict:
     return {"path": str(source), "text": text}
 
 
-def session_input(args) -> tuple[str, dict | None]:
+def session_input(args) -> tuple[str, dict | None, dict | None]:
     """Resolve continuation before assessment; the dispatcher rechecks the parent transactionally."""
     if not args.phase.strip() or len(args.phase) > 64 or any(ord(c) < 32 for c in args.phase):
         raise sessions.SessionError("invalid_phase", "phase must be nonempty, at most 64 characters, without control characters")
     if args.cwd is not None and "\x00" in args.cwd:
         raise sessions.SessionError("invalid_cwd", "working directory must not contain NUL")
     cwd = os.path.realpath(os.path.expanduser(args.cwd or os.getcwd()))
+    parent_workspace = None
     if args.session:
         parent = sessions.get(args.session)
         if parent["prompt_status"] != "confirmed":
@@ -218,9 +227,10 @@ def session_input(args) -> tuple[str, dict | None]:
         if args.cwd is not None and cwd != parent_cwd:
             raise sessions.SessionError("session_cwd_mismatch", "continuation must use the parent working directory")
         cwd = parent_cwd
+        parent_workspace = parent["workspace"]
     if not os.path.isdir(cwd):
         raise sessions.SessionError("invalid_cwd", "working directory does not exist")
-    return cwd, read_handoff(args.handoff) if args.handoff else None
+    return cwd, read_handoff(args.handoff) if args.handoff else None, parent_workspace
 
 
 def handoff_prompt(prompt: str, *, parent_id: str | None, phase: str, handoff: dict | None) -> str:
@@ -481,6 +491,10 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--session", help="parent session id; create a new attempt with its cwd and explicit handoff")
     p.add_argument("--handoff", type=Path, help="UTF-8 handoff file, up to 48 KiB (required with --session)")
     p.add_argument("--phase", default="task", help="phase label for the new session (default: task)")
+    p.add_argument("--isolation", choices=("shared", "worktree"),
+                   help="new task: shared by default; session continuation inherits its workspace")
+    p.add_argument("--worktree-timeout", type=positive_ms, default=60000,
+                   help="total Git preparation budget in ms, excluding assessment (default: 60000)")
     s = sub.add_parser("session", help="inspect durable dispatch sessions without contacting Herdr")
     ss = s.add_subparsers(dest="session_cmd", required=True)
     sl = ss.add_parser("list", help="list recent session summaries")
@@ -530,12 +544,20 @@ def main(argv: list[str] | None = None) -> int:
         ap.error("empty task")
     cwd = os.path.abspath(args.cwd or os.getcwd())
     handoff = None
+    workspace_plan = None
     if args.cmd == "dispatch":
         try:
-            cwd, handoff = session_input(args)
-        except sessions.SessionError as e:
+            cwd, handoff, parent_workspace = session_input(args)
+            if not args.json and (args.isolation == "worktree" or
+                                  (parent_workspace and parent_workspace["kind"] == "worktree")):
+                print(f"正在检查隔离工作区；Git 准备总预算 {args.worktree_timeout} ms…", file=sys.stderr, flush=True)
+            workspace_plan = workspaces.inspect(cwd, isolation=args.isolation,
+                                                 parent_workspace=parent_workspace,
+                                                 timeout_ms=args.worktree_timeout)
+        except (sessions.SessionError, workspaces.WorkspaceError) as e:
             failure = herdr.HerdrError(e.code, e.message)
             failure.stage = "session_input"
+            failure.workspace = getattr(e, "workspace", None)
             print(json.dumps(dispatch_error(failure), ensure_ascii=False), file=sys.stderr)
             return 1
     use_backend = not args.no_systemone
@@ -567,7 +589,20 @@ def main(argv: list[str] | None = None) -> int:
             return 1
 
     if args.cmd in ("route", "explain") or args.dry_run:
-        print(json.dumps(d.to_dict(), ensure_ascii=False) if args.json else render(d, policy))
+        preview = d.to_dict()
+        if args.cmd == "dispatch":
+            preview["workspace_plan"] = {"mode": workspace_plan["mode"], "source_cwd": cwd,
+                                          "workspace": workspace_plan["workspace"],
+                                          "inspection_ms": workspace_plan.get("inspection_ms", 0),
+                                          "timeout_ms": args.worktree_timeout}
+        if args.json:
+            print(json.dumps(preview, ensure_ascii=False))
+        else:
+            print(render(d, policy))
+            if args.cmd == "dispatch":
+                print(f"\nWorkspace: {workspace_plan['mode']} · {cwd}")
+                if workspace_plan["mode"] == "create":
+                    print(f"Git 准备预算 {args.worktree_timeout} ms；路径与分支将在实际派发时分配。")
         return 0
 
     # dispatch
@@ -578,13 +613,17 @@ def main(argv: list[str] | None = None) -> int:
         return 1
     wait_s = int(dcfg.get("agent_start_timeout_ms", 60000)) // 1000
     if not args.json:
+        if workspace_plan["mode"] == "create":
+            print("将创建按需 worktree，再启动 agent…", file=sys.stderr, flush=True)
         print(f"\n正在启动 {d.kind}，最多等 {wait_s} 秒，随后确认任务送达…", file=sys.stderr, flush=True)
     try:
         r = dispatch(d, target_pane=args.pane, cwd=cwd, name=args.name,
                      direction=args.direction or dcfg.get("direction", "auto"),
                      start_timeout_ms=int(dcfg.get("agent_start_timeout_ms", 60000)),
                      wait=args.wait, wait_timeout_ms=args.timeout,
-                     parent_id=args.session, phase=args.phase, task=task, handoff=handoff)
+                     parent_id=args.session, phase=args.phase, task=task, handoff=handoff,
+                     isolation=args.isolation, workspace_plan=workspace_plan,
+                     worktree_timeout_ms=args.worktree_timeout)
     except Exception as error:
         e = public_dispatch_error(error)
         print(json.dumps(dispatch_error(e, d), ensure_ascii=False), file=sys.stderr)
@@ -593,7 +632,8 @@ def main(argv: list[str] | None = None) -> int:
            "dispatch_id": r.dispatch_id, "stage": r.stage,
            "status": "confirmed", "prompt_status": r.prompt_status,
            "session_id": getattr(r, "session_id", r.dispatch_id),
-           "parent_id": args.session, "phase": args.phase}
+           "parent_id": args.session, "phase": args.phase,
+           "workspace": getattr(r, "workspace", None) or workspace_plan["workspace"]}
     if getattr(r, "session_warning", None):
         out["session_warning"] = r.session_warning
     if args.json:
@@ -601,6 +641,9 @@ def main(argv: list[str] | None = None) -> int:
     else:
         print(render(d, policy) + f"\n\n✓ 任务已确认送达 {r.agent}（pane {r.pane_id}）")
         print(f"Session: {out['session_id']}")
+        if out["workspace"]["kind"] == "worktree":
+            w = out["workspace"]
+            print(f"Worktree: {w['cwd']}\nBranch: {w['branch']} · 创建 {w['creation_ms']} ms")
         if out.get("session_warning"):
             print(f"Session 记录未能更新：{out['session_warning']}。任务已送达，请查看原 pane。", file=sys.stderr)
     return 0

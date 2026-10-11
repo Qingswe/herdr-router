@@ -6,7 +6,7 @@ from dataclasses import dataclass
 import re
 import uuid
 
-from . import agents, herdr, log, sessions
+from . import agents, herdr, log, sessions, workspace as workspaces
 from .score import Decision
 
 
@@ -20,6 +20,7 @@ class Dispatched:
     prompt_status: str
     session_id: str
     session_warning: str | None = None
+    workspace: dict | None = None
 
 
 _NAME_RE = re.compile(r"[a-z][a-z0-9_-]{0,31}")
@@ -35,13 +36,15 @@ def dispatch(decision: Decision, *, target_pane: str | None, cwd: str,
              start_timeout_ms: int = 60000, wait: bool = False,
              wait_timeout_ms: int | None = None, parent_id: str | None = None,
              phase: str = "task", task: str | None = None,
-             handoff: dict | None = None) -> Dispatched:
+             handoff: dict | None = None, isolation: str | None = None,
+             workspace_plan: dict | None = None, worktree_timeout_ms: int = 60000) -> Dispatched:
     dispatch_id = str(uuid.uuid4())
     stage, prompt_status, status = "prepare", "not_sent", "failed"
     pane_id, agent = None, name
     error = "unexpected_error"
     session_id, result, failure = None, None, None
     session_warning = None
+    active_workspace, workspace_pending = None, False
     record = {"event": "dispatch", "cwd": cwd, "decision": None,
               "parent_id": parent_id, "phase": phase}
 
@@ -58,6 +61,15 @@ def dispatch(decision: Decision, *, target_pane: str | None, cwd: str,
                 raise herdr.HerdrError(code, message) from None
             session_warning = session_warning or f"{code}: {message}"
 
+    def save_workspace(metadata):
+        nonlocal active_workspace, workspace_pending
+        active_workspace, workspace_pending = dict(metadata), True
+        try:
+            sessions.set_workspace(dispatch_id, active_workspace)
+        except sessions.SessionError as e:
+            raise herdr.HerdrError(e.code, e.message) from None
+        workspace_pending = False
+
     try:
         record["decision"] = decision.to_dict()
         if "\0" in decision.prompt:
@@ -70,13 +82,37 @@ def dispatch(decision: Decision, *, target_pane: str | None, cwd: str,
             record["decision"] = None
             raise herdr.HerdrError("invalid_prompt", "prompt must contain valid UTF-8 text") from None
         try:
+            if workspace_plan is None:
+                parent_workspace = sessions.get(parent_id)["workspace"] if parent_id is not None else None
+                workspace_plan = workspaces.inspect(cwd, isolation=isolation,
+                                                     parent_workspace=parent_workspace,
+                                                     timeout_ms=worktree_timeout_ms)
+            active_workspace = workspace_plan["workspace"]
             sessions.create(dispatch_id, decision=record["decision"], cwd=cwd,
-                            parent_id=parent_id, phase=phase, task=task, handoff=handoff)
+                            parent_id=parent_id, phase=phase, task=task, handoff=handoff,
+                            workspace=active_workspace)
         except sessions.SessionError as e:
+            raise herdr.HerdrError(e.code, e.message) from None
+        except workspaces.WorkspaceError as e:
+            active_workspace = e.workspace or active_workspace
             raise herdr.HerdrError(e.code, e.message) from None
         session_id = dispatch_id
         if prompt_bytes > 64 * 1024:
             raise herdr.HerdrError("prompt_too_large", "prompt exceeds 64 KiB of UTF-8 text")
+        if workspace_plan["mode"] != "shared":
+            stage = "workspace"
+            checkpoint()
+            try:
+                prepared = workspaces.materialize(workspace_plan, dispatch_id, worktree_timeout_ms,
+                                                  before_create=save_workspace)
+            except workspaces.WorkspaceError as e:
+                if e.workspace is not None:
+                    active_workspace, workspace_pending = e.workspace, True
+                raise herdr.HerdrError(e.code, e.message) from None
+            save_workspace(prepared)
+            cwd = prepared["cwd"]
+            record["cwd"] = cwd
+        stage = "prepare"
         try:
             agents.prepare(decision.kind, decision.model, decision.effort)
         except OSError:
@@ -128,10 +164,13 @@ def dispatch(decision: Decision, *, target_pane: str | None, cwd: str,
         stage, status, error = "complete", "confirmed", None
         result = Dispatched(agent=agent, pane_id=pane_id, prompt_result=prompt_result,
                             dispatch_id=dispatch_id, stage=stage, prompt_status=prompt_status,
-                            session_id=session_id, session_warning=session_warning)
+                            session_id=session_id, session_warning=session_warning,
+                            workspace=active_workspace)
         return result
     except BaseException as e:
         failure = e
+        if getattr(e, "workspace", None) is not None:
+            active_workspace, workspace_pending = e.workspace, True
         if isinstance(e, herdr.HerdrError):
             error = e.code
             pane_id = pane_id if pane_id is not None else e.pane_id
@@ -141,9 +180,15 @@ def dispatch(decision: Decision, *, target_pane: str | None, cwd: str,
         e.pane_id, e.agent = pane_id, agent
         e.dispatch_id, e.stage, e.prompt_status = dispatch_id, stage, prompt_status
         e.session_id, e.session_warning = session_id, session_warning
+        e.workspace = active_workspace
         raise
     finally:
         if session_id is not None:
+            if workspace_pending:
+                try:
+                    sessions.set_workspace(session_id, active_workspace)
+                except Exception:
+                    session_warning = session_warning or "session_store_error: could not persist workspace state"
             try:
                 sessions.update(session_id, stage=stage, status=status, prompt_status=prompt_status,
                                 agent=agent, pane_id=pane_id, error=error)
@@ -158,6 +203,8 @@ def dispatch(decision: Decision, *, target_pane: str | None, cwd: str,
             failure.session_warning = session_warning
         if session_warning is not None:
             record["session_warning"] = session_warning
+        if active_workspace is not None:
+            record["workspace"] = active_workspace
         record.update(agent=agent, pane_id=pane_id, dispatch_id=dispatch_id,
                       stage=stage, prompt_status=prompt_status, status=status)
         if error is not None:
