@@ -14,7 +14,7 @@
 
 | 东西 | 位置 |
 |---|---|
-| 仓库 | `~/Projects/herdr-router`（git 已 init，尚无提交） |
+| 仓库 | `~/Projects/herdr-router`（按阶段提交，保留可回退快照） |
 | CLI | `~/.local/bin/herdr-router` → `bin/herdr-router`（symlink） |
 | Herdr 插件 | `herdr plugin link ~/Projects/herdr-router`（已 link，改代码即生效，`herdr-plugin.toml` 改了才需要重新 link / reload） |
 | Claude Code skill | `~/.claude/skills/herdr-route` → `skill/`（symlink） |
@@ -22,6 +22,7 @@
 | 备份 | 同目录 `policy.backups/`，保留最近 10 份 |
 | 状态目录 | `~/.local/state/herdr/plugins/herdr-router/` |
 | ├ `decisions.jsonl` | 每次 dispatch 追加一行（网页图上的历史点就来自这里） |
+| ├ `sessions.sqlite3` | 派发 Session 与交接快照（标准库 SQLite） |
 | ├ `ui-token` | 网页令牌（22 字符，0600） |
 | ├ `ui.json` | 后台网页服务的 `{pid, host, port}` |
 | └ `ui.log` | 插件 action 后台启动的网页服务日志 |
@@ -43,6 +44,7 @@ router/
   catalog.py    各 kind 可选模型（claude 静态别名、codex 读 models_cache.json、cursor 跑 --list-models 并缓存 24h）
   herdr.py      herdr CLI 的薄封装（全部走 subprocess + JSON）
   dispatch.py   Decision → prepare / name → split pane → start → 确认送达 → 可选 wait → 终态日志
+  sessions.py   Session 持久化、短事务 checkpoint、父子关联与只读查询
   log.py        decisions.jsonl 追加（失败静默）
   cli.py        argparse 子命令、终端渲染、popup、插件 action
   web.py        本地网页服务（ThreadingHTTPServer）
@@ -81,6 +83,10 @@ herdr pane split → herdr agent start <name> --kind K --pane P -- <args> → he
 派发先用 `agent prompt --wait --until working --until blocked --timeout 15000` 确认活动；stalled 时只补充一次 `agent wait` 观察 working/blocked，不重发。用户 `--wait` 的结束等待在确认后单独执行，且不传 `--until settled`（Herdr 没有这个状态）。等待结束超时仍保留 `prompt_status=confirmed`。
 
 每次调用 `dispatch()` 有 `dispatch_id`，finally 写一条终态记录（`event=dispatch`，保留旧字段），补充 `stage/status/prompt_status`。`not_sent` 是确定未发送，`unknown` 是可能已送达但无法确认，`confirmed` 是观察到提交后的活动。失败 `HerdrError` 带已知 pane/agent 和这些字段。CLI `--json` 成功 stdout 只有一个对象，失败 stdout 空、stderr 结构化错误；不要仅凭 exit 1 判断可以重试。
+
+`dispatch()` 在 prepare 前创建 Session（id = dispatch_id），关键执行边界独立提交 checkpoint，事务不能跨 Herdr RPC。发送前先存 `prompt/unknown`；这一写入失败时不调用 prompt，实际输出保持 `not_sent`。确认后的 checkpoint 和最后存储失败不能遮蔽原异常或已确认送达，也不能跳过用户要求的 wait，输出附带 `session_warning`；锁竞争用 `session_store_busy` 区分其他存储错误。`in_progress` 仅表示缺少终态，不能用它断言 agent 当前工作或任务成功；不靠 PID 猜完成，不自动恢复/重发。
+
+`session list/show` 不加载 policy、不调用 Herdr、不创建不存在的数据库。`dispatch --session <parent> --handoff <file>` 是新 pane/新尝试，通过 parent_id 关联，继承并验证同一 realpath cwd；前一 agent 的对话不会自动复制。父尝试必须 confirmed，但这不证明前一任务完成；交接前先人工检查结果。handoff 普通 UTF-8 文件最多 48KiB，保留正文快照；只用新 task 路由，`decide()` 后再拼交接（防止摘要里的 @alias/!override 改路由或流入 Jev），最终 prompt 最多 64KiB。网页不读取 Session、不能派发。
 
 ### 打分公式（score.penalty，越低越好）
 

@@ -17,12 +17,13 @@ import select
 import shlex
 import shutil
 import signal
+import stat
 import sys
 import time
 import unicodedata
 from pathlib import Path
 
-from . import PLUGIN_ID, __version__, agents, herdr, model
+from . import PLUGIN_ID, __version__, agents, herdr, model, sessions
 from .classify import assess, parse_overrides
 from .dispatch import dispatch
 from .score import Decision, NoAgentAvailable, decide
@@ -138,10 +139,24 @@ def dispatch_error(e: herdr.HerdrError, d: Decision | None = None) -> dict:
     out = {"error": {"code": e.code, "message": e.message},
            "dispatch_id": getattr(e, "dispatch_id", None), "stage": getattr(e, "stage", None),
            "status": "failed", "prompt_status": getattr(e, "prompt_status", "not_sent"),
-           "pane_id": e.pane_id, "agent": e.agent, "recovery": dispatch_recovery(e)}
+           "pane_id": e.pane_id, "agent": e.agent, "recovery": dispatch_recovery(e),
+           "session_id": getattr(e, "session_id", None)}
+    if getattr(e, "session_warning", None):
+        out["session_warning"] = e.session_warning
     if d is not None:
         out["decision"] = d.to_dict()
     return out
+
+
+def public_dispatch_error(error: Exception) -> herdr.HerdrError:
+    """Keep location/delivery context while hiding unexpected exception text."""
+    if isinstance(error, herdr.HerdrError):
+        return error
+    result = herdr.HerdrError("unexpected_error", "dispatch failed unexpectedly; inspect the recorded attempt")
+    for key in ("pane_id", "agent", "dispatch_id", "stage", "session_id", "session_warning"):
+        setattr(result, key, getattr(error, key, None))
+    result.prompt_status = getattr(error, "prompt_status", "unknown")
+    return result
 
 
 def positive_ms(value: str) -> int:
@@ -149,6 +164,96 @@ def positive_ms(value: str) -> int:
     if n <= 0:
         raise argparse.ArgumentTypeError("timeout must be a positive number of milliseconds")
     return n
+
+
+def session_limit(value: str) -> int:
+    n = int(value)
+    if not 1 <= n <= 1000:
+        raise argparse.ArgumentTypeError("limit must be from 1 to 1000")
+    return n
+
+
+_HANDOFF_BYTES = 48 * 1024
+_PROMPT_BYTES = 64 * 1024
+
+
+def read_handoff(path: Path) -> dict:
+    """Snapshot a bounded ordinary UTF-8 file, never a pipe or stdin."""
+    if str(path) == "-":
+        raise sessions.SessionError("invalid_handoff", "handoff must be a UTF-8 file, not stdin")
+    try:
+        source = path.expanduser().resolve()
+        fd = os.open(source, os.O_RDONLY | os.O_NONBLOCK)
+        with os.fdopen(fd, "rb") as f:
+            if not stat.S_ISREG(os.fstat(f.fileno()).st_mode):
+                raise sessions.SessionError("invalid_handoff", "handoff must be an ordinary UTF-8 file")
+            data = f.read(_HANDOFF_BYTES + 1)
+    except (OSError, ValueError, RuntimeError):
+        raise sessions.SessionError("handoff_read_failed", "could not read handoff file") from None
+    if len(data) > _HANDOFF_BYTES:
+        raise sessions.SessionError("handoff_too_large", "handoff exceeds 48 KiB")
+    try:
+        text = data.decode("utf-8")
+    except UnicodeDecodeError:
+        raise sessions.SessionError("invalid_handoff", "handoff must contain valid UTF-8 text") from None
+    if not text.strip() or "\x00" in text:
+        raise sessions.SessionError("invalid_handoff", "handoff must contain nonempty text without NUL")
+    return {"path": str(source), "text": text}
+
+
+def session_input(args) -> tuple[str, dict | None]:
+    """Resolve continuation before assessment; the dispatcher rechecks the parent transactionally."""
+    if not args.phase.strip() or len(args.phase) > 64 or any(ord(c) < 32 for c in args.phase):
+        raise sessions.SessionError("invalid_phase", "phase must be nonempty, at most 64 characters, without control characters")
+    if args.cwd is not None and "\x00" in args.cwd:
+        raise sessions.SessionError("invalid_cwd", "working directory must not contain NUL")
+    cwd = os.path.realpath(os.path.expanduser(args.cwd or os.getcwd()))
+    if args.session:
+        parent = sessions.get(args.session)
+        if parent["prompt_status"] != "confirmed":
+            raise sessions.SessionError("session_parent_unconfirmed", "inspect the parent attempt before continuing; delivery is not confirmed")
+        if not args.handoff:
+            raise sessions.SessionError("handoff_required", "continuing a session requires an explicit handoff file")
+        parent_cwd = os.path.realpath(parent["cwd"])
+        if args.cwd is not None and cwd != parent_cwd:
+            raise sessions.SessionError("session_cwd_mismatch", "continuation must use the parent working directory")
+        cwd = parent_cwd
+    if not os.path.isdir(cwd):
+        raise sessions.SessionError("invalid_cwd", "working directory does not exist")
+    return cwd, read_handoff(args.handoff) if args.handoff else None
+
+
+def handoff_prompt(prompt: str, *, parent_id: str | None, phase: str, handoff: dict | None) -> str:
+    if handoff:
+        prompt = (f"Session handoff (parent: {parent_id or 'none'}, phase: {phase})\n"
+                  "The earlier agent conversation is not automatically available. "
+                  "Use this explicit handoff as context for the next task.\n\n"
+                  f"--- Handoff ---\n{handoff['text']}\n--- End handoff ---\n\nNext task:\n{prompt}")
+    if "\x00" in prompt:
+        raise sessions.SessionError("invalid_prompt", "task prompt must not contain NUL")
+    try:
+        size = len(prompt.encode("utf-8"))
+    except UnicodeEncodeError:
+        raise sessions.SessionError("invalid_prompt", "task prompt must contain valid UTF-8 text") from None
+    if size > _PROMPT_BYTES:
+        raise sessions.SessionError("prompt_too_large", "final task prompt exceeds 64 KiB")
+    return prompt
+
+
+def run_session(args) -> int:
+    try:
+        result = sessions.list_sessions(args.limit) if args.session_cmd == "list" else sessions.get(args.id)
+    except sessions.SessionError as e:
+        print(json.dumps({"error": {"code": e.code, "message": e.message}}, ensure_ascii=False), file=sys.stderr)
+        return 1
+    if args.json or args.session_cmd == "show":
+        print(json.dumps(result, ensure_ascii=False, indent=None if args.json else 2))
+    elif not result:
+        print("No sessions recorded.")
+    else:
+        for item in result:
+            print(f"{item['id']}  {item['phase']}  {item['status']}/{item['prompt_status']}  {item['cwd']}")
+    return 0
 
 
 # --------------------------------------------------------------------------
@@ -322,11 +427,15 @@ def run_popup(policy: dict) -> int:
     try:
         r = dispatch(d, target_pane=target, cwd=cwd,
                      direction=dcfg.get("direction", "auto"),
-                     start_timeout_ms=int(dcfg.get("agent_start_timeout_ms", 60000)))
+                     start_timeout_ms=int(dcfg.get("agent_start_timeout_ms", 60000)), task=task)
         print(f"\n✓ 任务已确认送达 {r.agent}（pane {r.pane_id}）")
+        print(f"Session: {getattr(r, 'session_id', r.dispatch_id)}")
+        if getattr(r, "session_warning", None):
+            print(f"Session 记录未能更新：{r.session_warning}。任务已送达，请查看原 pane。")
         time.sleep(POPUP_DONE_S)  # the new pane is the result; no need to hold focus here
         return 0
-    except herdr.HerdrError as e:
+    except Exception as error:
+        e = public_dispatch_error(error)
         print(f"\n✗ 派发失败：{e}")
         print(dispatch_recovery(e))
         if e.pane_id:
@@ -369,6 +478,17 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--wait", action="store_true", help="wait until the agent settles")
     p.add_argument("--timeout", type=positive_ms, help="settled-state wait timeout in ms (with --wait)")
     p.add_argument("--dry-run", action="store_true", help="decide only; do not launch")
+    p.add_argument("--session", help="parent session id; create a new attempt with its cwd and explicit handoff")
+    p.add_argument("--handoff", type=Path, help="UTF-8 handoff file, up to 48 KiB (required with --session)")
+    p.add_argument("--phase", default="task", help="phase label for the new session (default: task)")
+    s = sub.add_parser("session", help="inspect durable dispatch sessions without contacting Herdr")
+    ss = s.add_subparsers(dest="session_cmd", required=True)
+    sl = ss.add_parser("list", help="list recent session summaries")
+    sl.add_argument("--limit", type=session_limit, default=20)
+    sl.add_argument("--json", action="store_true")
+    sh = ss.add_parser("show", help="show a session and its saved handoff")
+    sh.add_argument("id")
+    sh.add_argument("--json", action="store_true")
     u = sub.add_parser("ui", help="web editor for dimensions and profiles")
     u.add_argument("--port", type=int, default=8765)
     u.add_argument("--host", default="127.0.0.1", help="bind address (default 127.0.0.1)")
@@ -381,6 +501,8 @@ def main(argv: list[str] | None = None) -> int:
     a.add_argument("action_id", choices=["route", "route-selection", "open-editor"])
 
     args = ap.parse_args(argv)
+    if args.cmd == "session":
+        return run_session(args)
     policy = model.load(args.policy)
     extend_path(policy)
 
@@ -407,6 +529,15 @@ def main(argv: list[str] | None = None) -> int:
     if not task:
         ap.error("empty task")
     cwd = os.path.abspath(args.cwd or os.getcwd())
+    handoff = None
+    if args.cmd == "dispatch":
+        try:
+            cwd, handoff = session_input(args)
+        except sessions.SessionError as e:
+            failure = herdr.HerdrError(e.code, e.message)
+            failure.stage = "session_input"
+            print(json.dumps(dispatch_error(failure), ensure_ascii=False), file=sys.stderr)
+            return 1
     use_backend = not args.no_systemone
 
     if args.cmd == "classify":
@@ -426,6 +557,15 @@ def main(argv: list[str] | None = None) -> int:
         print(json.dumps(payload, ensure_ascii=False), file=sys.stderr)
         return 1
 
+    if args.cmd == "dispatch":
+        try:
+            d.prompt = handoff_prompt(d.prompt, parent_id=args.session, phase=args.phase, handoff=handoff)
+        except sessions.SessionError as e:
+            failure = herdr.HerdrError(e.code, e.message)
+            failure.stage = "session_input"
+            print(json.dumps(dispatch_error(failure, d), ensure_ascii=False), file=sys.stderr)
+            return 1
+
     if args.cmd in ("route", "explain") or args.dry_run:
         print(json.dumps(d.to_dict(), ensure_ascii=False) if args.json else render(d, policy))
         return 0
@@ -443,17 +583,26 @@ def main(argv: list[str] | None = None) -> int:
         r = dispatch(d, target_pane=args.pane, cwd=cwd, name=args.name,
                      direction=args.direction or dcfg.get("direction", "auto"),
                      start_timeout_ms=int(dcfg.get("agent_start_timeout_ms", 60000)),
-                     wait=args.wait, wait_timeout_ms=args.timeout)
-    except herdr.HerdrError as e:
+                     wait=args.wait, wait_timeout_ms=args.timeout,
+                     parent_id=args.session, phase=args.phase, task=task, handoff=handoff)
+    except Exception as error:
+        e = public_dispatch_error(error)
         print(json.dumps(dispatch_error(e, d), ensure_ascii=False), file=sys.stderr)
         return 1
     out = {"agent": r.agent, "pane_id": r.pane_id, "decision": d.to_dict(),
            "dispatch_id": r.dispatch_id, "stage": r.stage,
-           "status": "confirmed", "prompt_status": r.prompt_status}
+           "status": "confirmed", "prompt_status": r.prompt_status,
+           "session_id": getattr(r, "session_id", r.dispatch_id),
+           "parent_id": args.session, "phase": args.phase}
+    if getattr(r, "session_warning", None):
+        out["session_warning"] = r.session_warning
     if args.json:
         print(json.dumps(out, ensure_ascii=False))
     else:
         print(render(d, policy) + f"\n\n✓ 任务已确认送达 {r.agent}（pane {r.pane_id}）")
+        print(f"Session: {out['session_id']}")
+        if out.get("session_warning"):
+            print(f"Session 记录未能更新：{out['session_warning']}。任务已送达，请查看原 pane。", file=sys.stderr)
     return 0
 
 

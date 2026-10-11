@@ -1,6 +1,6 @@
 # Router 演进方案
 
-讨论日期：2026-10-11。用户选择「与 Opus 讨论后实现第一阶段」。
+讨论日期：2026-10-11。用户选择「与 Opus 讨论后实现第一阶段」，随后授权继续，并要求按阶段 git 保存。第一阶段提交：`4d55a8e`。
 
 ## 第一阶段：可靠派发
 
@@ -31,9 +31,17 @@
 
 图形 territory 仍展示静态策略切片；额度随账户与时间变化，应作为可选资格叠加层，不能把几何覆盖率误称为真实使用比例。
 
-### Session 与 worktree
+### 第二阶段：Session 与显式交接
 
-先加入 `Session`：id、parent_id、phase、task/handoff、route、cwd、dispatch_id、pane/agent、status、workspace。存储待下一阶段比较：Opus 倾向先用原子写 JSON 文件，主代理倾向在需要并发更新与历史查询时用标准库 SQLite。决策日志继续作为调试历史。明确区分发送、活动确认与任务完成。
+本阶段采用标准库 SQLite：已有 popup/CLI 多进程并发和按 id/父子关系查询需求，短事务能覆盖创建与进度更新；不增加依赖。每次派发先持久化 `Session`，id 等于 dispatch_id；存 parent_id、phase、task/handoff 快照、decision、cwd、pane/agent、status/stage/prompt_status、workspace 和时间戳。JSONL 决策日志继续作为图形历史。旧日志不自动导入 Session。
+
+事务独立于 Herdr RPC，启动/发送前的持久化失败停止后续操作；prompt 前先存 unknown，若该 checkpoint 失败则不发送，内存结果仍为 not_sent。确认后和 terminal 写入失败保留真实送达结果/原异常，继续用户要求的 wait，附带 session_warning，不允许通过存储失败鼓励重发。锁竞争使用 session_store_busy，与其他存储错误区分。in_progress 只表示没有终态记录，不根据 PID 猜 agent 当前状态。崩溃留下最后 checkpoint，不自动恢复或重发。
+
+CLI 增加 session list/show（只读，不加载 policy、不联系 Herdr）；dispatch --session <parent> --handoff <file> --phase <label> 创建新 pane/新 Session，沿用父 cwd，显式不同 cwd 拒绝。父尝试要求 confirmed，交接前仍需检查其任务是否完成。handoff 必须显式给出，普通 UTF-8 文件最多 48KiB，最终 prompt 最多 64KiB；先路由新 task，再加入交接正文，防止摘要中的覆盖 token 或私有内容进入评估。--dry-run 无记录与 pane。
+
+验收覆盖父子关联、cwd realpath、交接快照/错误/大小边界、纯 JSON、无 policy/Herdr 的查询、并发数据库更新、checkpoint 失败、确认后存储失败、真实子进程 prompt 时强制退出留下 unknown。评分、网页 API、账户额度和旧 pane 恢复不在本阶段。
+
+### 第三阶段：worktree 隔离
 
 交接依赖文件及显式摘要，不假设读取了前一 agent 的全部对话。worktree 创建前检查仓库和工作区状态，路由后再次验证 HEAD 与状态，生成不含任务正文的分支名与路径，后续 session 复用并校验同一 worktree。失败保留目录，不自动 merge/push/delete。
 
@@ -69,3 +77,11 @@ Opus 通过当前 router 的 `opus-xhigh` profile 参与只读架构讨论，实
 Opus 最终复查未发现约定范围内的阻断问题，并验证了真实只读 RPC 的返回结构和当前用户 policy。主代理进一步处理其两个边界提醒：`prompt --wait` 的 `agent_not_found` 可能发生在提交后的确认阶段，统一保守记 unknown；CLI UTF-8 解码采用 replace，并以真实本地子进程的无效 UTF-8 输出测试验证不会跳过结构化异常路径。
 
 已知边界：Herdr 的活动观察不跟踪特定轮次。stalled 后若 agent 已快速完成，后续观察可能保守地记为 unknown；必须查看 pane 后决定恢复。`--wait` 超时仍使用兼容的 exit 1，送达事实通过 `prompt_status=confirmed` 表达。Ctrl-C/SystemExit 会写 best-effort 日志，但进程被强杀、机器掉电或日志存储失败无法保证终态记录；这不是持久化 Session 的实现。
+
+第二阶段实现由 router 对完整规格进行本地规则评估，选择 `sol-xhigh`（Jev 网络请求超时后使用已说明的 fallback）；Opus 负责设计与只读复查，主代理负责 CLI/交接/文档集成。存储使用标准库 SQLite，保留 Python 与原生 JS。Opus 复查促成确认后 checkpoint 改为 warning 并继续 wait、busy 单独错误码、CLI/事务校验错误码一致、安全 JSON 化意外异常、JSONL 增加 parent_id/phase。
+
+第二阶段验证：Python 全套 157 个测试通过，包含独立进程并发写入和 prompt 时 `os._exit` 的中断读取测试；前端未改动，第一阶段的 26 个测试保持适用。真实 Herdr 父子冒烟使用 Luna low 与独立临时数据库，实际回复 `session-parent-ok`、`session-handoff-ok`；验证不同 id、新 pane、同 cwd、parent_id、交接正文快照、交接内的 @opus/!hard 不影响档位、每次恰有一条终态日志。两个临时测试 pane 已关闭。
+
+第二阶段边界：尚不复制原 agent 的完整会话、不复用旧 pane、不创建 worktree、不推断任务验收通过；同一 cwd 的续接应先检查前一任务已结束。数据库保存最后已提交的 checkpoint；缺少终态和送达 unknown 都不能据此自动重发。
+
+Opus 最终只读复查未发现阻断错误，独立验证确认后 busy 仍继续 wait、warning 在终态更新恢复后仍保留、损坏库保持原样、意外异常的 JSON 保留送达与位置字段，并在隔离目录再次验证全部 157 个测试通过。

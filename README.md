@@ -72,7 +72,24 @@ The router never resends a prompt automatically. If the initial activity check s
 
 Launch policy settings are checked before opening a pane: `dispatch.direction` is `auto`, `right`, or `down`, and `agent_start_timeout_ms` is an integer from 1000 to 300000.
 
-The next-stage plan and technology-stack assessment are in [plans/router-evolution.md](plans/router-evolution.md).
+## Sessions and handoff
+
+Every real dispatch, including the popup, saves a Session to `sessions.sqlite3` in the state directory before opening a pane. Its `session_id` equals the attempt's `dispatch_id`. The record includes the task, route, working directory, phase, known agent/pane, and delivery state. Decision logs continue to feed the editor as before. Existing JSONL history is not automatically imported.
+
+```bash
+herdr-router session list --limit 20
+herdr-router session show <session-id> --json
+# After inspecting the previous result, write the decisions and remaining work to handoff.md:
+herdr-router dispatch "检查第一阶段并继续实现" --session <session-id> --handoff handoff.md --phase review --json
+```
+
+Continuation creates a **new Session and new pane**, linked by `parent_id`, and inherits the parent's working directory. An explicitly different `--cwd` is rejected. It requires a parent with confirmed delivery and an explicit UTF-8 handoff file; confirm that the prior work has finished before continuing in the shared directory. The earlier conversation is not automatically available. The handoff is copied into the record and prompt, so later edits to the source file do not change this attempt. Only the new task participates in assessment and inline overrides; the handoff is added after routing. A standalone `--handoff` is also supported for a fresh task.
+
+Handoff files must be ordinary UTF-8 text files, at most 48 KiB; the final prompt is limited to 64 KiB. `--handoff -` is rejected because task stdin is a separate input. `--phase` is a nonempty label of up to 64 characters. `--dry-run` validates and previews the continuation without creating a Session or pane. Session inspection does not load the policy or contact Herdr.
+
+`status=in_progress` means the attempt has no terminal record; it does **not** prove an agent is currently running. A crash at the prompt boundary leaves `stage=prompt`, `prompt_status=unknown`. Inspection never retries or infers completion. Writes use short SQLite transactions and must succeed before starting or submitting work. After activity is confirmed, persistence failures preserve the delivery outcome, continue any requested wait, and report `session_warning`; inspect the original pane and the best-effort decision log. `session_store_busy` reports lock contention separately from other storage errors. A `confirmed` Session still does not prove the task succeeded.
+
+The staged roadmap and technology-stack assessment are in [plans/router-evolution.md](plans/router-evolution.md).
 
 ## Web editor
 

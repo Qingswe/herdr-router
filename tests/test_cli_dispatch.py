@@ -81,6 +81,19 @@ class DispatchCliTest(unittest.TestCase):
         self.assertTrue(send.call_args.kwargs["wait"])
         self.assertEqual(send.call_args.kwargs["wait_timeout_ms"], 10000)
 
+    def test_unexpected_failure_preserves_context_as_json_without_exception_text(self):
+        error = ValueError("private task body should not be echoed")
+        error.pane_id, error.agent, error.dispatch_id = "w1:p2", "worker", "attempt-1"
+        error.stage, error.prompt_status, error.session_id = "prompt", "unknown", "attempt-1"
+        code, stdout, stderr, _, _ = self.invoke(error=error)
+        self.assertEqual((code, stdout), (1, ""))
+        payload = json.loads(stderr)
+        self.assertEqual(payload["error"]["code"], "unexpected_error")
+        self.assertEqual((payload["prompt_status"], payload["pane_id"], payload["session_id"]),
+                         ("unknown", "w1:p2", "attempt-1"))
+        self.assertNotIn("private task body", stderr)
+        self.assertNotIn("Traceback", stderr)
+
     def test_invalid_saved_dispatch_settings_fail_before_assessment_or_pane_creation(self):
         for bad in ("60s", 900000, True):
             with self.subTest(timeout=bad):

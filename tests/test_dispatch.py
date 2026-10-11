@@ -2,6 +2,7 @@
 
 import json
 import os
+import sqlite3
 import subprocess
 import sys
 import tempfile
@@ -11,9 +12,12 @@ from contextlib import ExitStack
 from pathlib import Path
 from unittest import mock
 
-from router import herdr
+from router import herdr, sessions
 from router.dispatch import dispatch
 from router.score import Decision
+
+
+_RUN_PROCESS = subprocess.run  # Herdr's run mock must not intercept offline Python children.
 
 
 def decision():
@@ -62,6 +66,7 @@ class DispatchTest(unittest.TestCase):
         self.assertTrue({"ts", "event", "cwd", "decision", "agent", "pane_id",
                          "dispatch_id", "stage", "prompt_status", "status"} <= record.keys())
         self.assertEqual(record["event"], "dispatch")
+        self.assertEqual((record["parent_id"], record["phase"]), (None, "task"))
         self.assertEqual(record["cwd"], self.tmp)
         self.assertEqual(record["decision"], self.d.to_dict())
         self.assertEqual((record["stage"], record["prompt_status"], record["status"]),
@@ -86,6 +91,11 @@ class DispatchTest(unittest.TestCase):
         record = self.records()[-1]
         self.assert_record(record, stage, prompt_status, "failed", code, pane_id, agent)
         self.assertEqual(error.dispatch_id, record["dispatch_id"])
+        if error.session_id is not None:
+            stored = sessions.get(error.session_id)
+            self.assertEqual(error.session_id, error.dispatch_id)
+            for field in ("agent", "pane_id", "stage", "prompt_status", "status", "error"):
+                self.assertEqual(stored[field], record.get(field))
         return error
 
     def test_default_confirms_activity_without_waiting_for_completion(self):
@@ -102,6 +112,11 @@ class DispatchTest(unittest.TestCase):
         self.assertEqual(len(self.records()), 1)
         self.assert_record(self.records()[0], "complete", "confirmed", "confirmed")
         self.assertEqual(result.dispatch_id, self.records()[0]["dispatch_id"])
+        self.assertEqual(result.session_id, result.dispatch_id)
+        self.assertIsNone(result.session_warning)
+        stored = sessions.get(result.session_id)
+        self.assertEqual((stored["stage"], stored["status"], stored["prompt_status"]),
+                         ("complete", "confirmed", "confirmed"))
         self.assertIn(result.dispatch_id[:8], self.unique_agent_name.call_args.args[0])
 
     def test_dispatch_ids_are_unique(self):
@@ -169,7 +184,7 @@ class DispatchTest(unittest.TestCase):
         self.assert_record(self.records()[0], "complete", "confirmed", "confirmed")
 
     def test_failed_stalled_observation_remains_unknown_even_for_blocked_error(self):
-        for index, code in enumerate(("timeout", "agent_blocked", "agent_prompt_stalled"), 1):
+        for index, code in enumerate(("timeout", "agent_blocked", "agent_prompt_stalled", "agent_not_found"), 1):
             with self.subTest(code=code):
                 self.agent_prompt.side_effect = herdr.HerdrError("agent_prompt_stalled", "stalled")
                 self.agent_wait.side_effect = herdr.HerdrError(code, "observation failed")
@@ -287,6 +302,9 @@ class DispatchTest(unittest.TestCase):
                     self.assertEqual(len(self.records()), count + 1)
                     self.assert_record(self.records()[-1], stage, delivery, "failed", "interrupted",
                                        None if stage == "prepare" else "new-pane", "chosen")
+                    stored = sessions.get(caught.exception.session_id)
+                    self.assertEqual((stored["stage"], stored["prompt_status"], stored["error"]),
+                                     (stage, delivery, "interrupted"))
                     operation_mock.side_effect = None
 
     def test_programming_errors_are_logged_and_propagate_unchanged(self):
@@ -297,6 +315,7 @@ class DispatchTest(unittest.TestCase):
         self.assertIs(caught.exception, error)
         self.assertEqual(len(self.records()), 1)
         self.assert_record(self.records()[0], "prompt", "unknown", "failed", "unexpected_error")
+        self.assertEqual(sessions.get(error.session_id)["error"], "unexpected_error")
 
     def test_log_os_error_does_not_change_success_or_failure(self):
         with mock.patch("router.dispatch.log.append", side_effect=OSError("log unavailable")) as append:
@@ -308,6 +327,334 @@ class DispatchTest(unittest.TestCase):
             self.assertIs(caught.exception, failure)
             self.assertEqual(failure.prompt_status, "unknown")
             self.assertEqual(append.call_count, 2)
+
+    def test_checkpoints_are_committed_before_prepare_split_start_prompt_and_wait(self):
+        observed = []
+        active = None
+
+        def observe(stage, delivery, *, agent=None, pane=None):
+            nonlocal active
+            records = sessions.list_sessions()
+            self.assertEqual(len(records), 1)
+            active = records[0]["id"]
+            record = sessions.get(active)
+            self.assertEqual((record["stage"], record["prompt_status"], record["status"]),
+                             (stage, delivery, "in_progress"))
+            self.assertEqual((record["agent"], record["pane_id"]), (agent, pane))
+            # A second connection can take the writer lock during every RPC.
+            conn = sqlite3.connect(Path(self.tmp) / "sessions.sqlite3", timeout=0.1)
+            try:
+                conn.execute("BEGIN IMMEDIATE")
+            finally:
+                conn.close()
+            observed.append(stage)
+
+        self.prepare.side_effect = lambda *args: observe("prepare", "not_sent")
+        self.split.side_effect = lambda *args: (observe("split", "not_sent", agent="r-test-1") or "new-pane")
+        self.agent_start.side_effect = lambda *args: observe("start", "not_sent", agent="r-test-1", pane="new-pane")
+        self.agent_prompt.side_effect = lambda *args, **kwargs: (
+            observe("prompt", "unknown", agent="r-test-1", pane="new-pane") or {})
+        self.agent_wait.side_effect = lambda *args, **kwargs: (
+            observe("wait", "confirmed", agent="r-test-1", pane="new-pane") or {})
+        result = self.invoke(wait=True)
+        self.assertEqual(result.session_id, active)
+        self.assertEqual(observed, ["prepare", "split", "start", "prompt", "wait"])
+
+    def test_resolved_agent_is_durable_before_target_lookup(self):
+        def current():
+            record = sessions.list_sessions()[0]
+            self.assertEqual((record["stage"], record["agent"]), ("resolve", "r-test-1"))
+            return "source"
+        self.current_pane_id.side_effect = current
+        self.invoke(target_pane=None)
+
+    def test_initial_store_failure_never_prepares_or_fabricates_session_id(self):
+        with mock.patch("router.dispatch.sessions.create", side_effect=sessions.SessionError(
+                "session_store_error", "store unavailable")):
+            error = self.failure("session_store_error", "prepare", pane_id=None, agent=None)
+        self.assertIsNone(error.session_id)
+        self.assertIsNone(error.session_warning)
+        self.assertEqual(sessions.list_sessions(), [])
+        self.assertNotIn("session_id", self.records()[0])
+        self.assertEqual(self.calls.mock_calls, [])
+
+    def test_corrupt_existing_store_fails_closed_before_prepare(self):
+        db = Path(self.tmp) / "sessions.sqlite3"
+        db.write_bytes(b"corrupt sqlite private SQL")
+        original = db.read_bytes()
+        error = self.failure("session_store_error", "prepare", pane_id=None, agent=None)
+        self.assertIsNone(error.session_id)
+        self.assertEqual(db.read_bytes(), original)
+        self.assertEqual(self.calls.mock_calls, [])
+
+    def test_checkpoint_read_corruption_does_not_resolve_or_split(self):
+        def corrupt(*args):
+            record = sessions.list_sessions()[0]
+            conn = sqlite3.connect(Path(self.tmp) / "sessions.sqlite3")
+            try:
+                conn.execute("UPDATE sessions SET decision = ? WHERE id = ?", ("invalid", record["id"]))
+                conn.commit()
+            finally:
+                conn.close()
+        self.prepare.side_effect = corrupt
+        with self.assertRaises(herdr.HerdrError) as caught:
+            self.invoke()
+        self.assertEqual((caught.exception.code, caught.exception.stage), ("session_store_error", "resolve"))
+        self.assertIsNotNone(caught.exception.session_id)
+        self.assertIn("session_store_error", caught.exception.session_warning)
+        self.unique_agent_name.assert_not_called()
+        self.split.assert_not_called()
+        self.assertEqual(len(self.records()), 1)
+
+    def test_each_failed_boundary_checkpoint_prevents_following_operation(self):
+        original = sessions.update
+        for stage, pane_id, next_operation in (("resolve", None, self.unique_agent_name),
+                                               ("split", None, self.split),
+                                               ("start", "new-pane", self.agent_start)):
+            with self.subTest(stage=stage):
+                self.calls.reset_mock()
+                def fail(session_id, **kwargs):
+                    if kwargs["status"] == "in_progress" and kwargs["stage"] == stage:
+                        raise sessions.SessionError("session_store_error", "checkpoint unavailable")
+                    return original(session_id, **kwargs)
+                with mock.patch("router.dispatch.sessions.update", side_effect=fail):
+                    self.failure("session_store_error", stage, pane_id=pane_id,
+                                 agent=None if stage == "resolve" else "r-test-1")
+                next_operation.assert_not_called()
+                self.agent_prompt.assert_not_called()
+
+    def test_failed_pre_prompt_checkpoint_keeps_actual_not_sent(self):
+        original = sessions.update
+        def fail(session_id, **kwargs):
+            if kwargs["status"] == "in_progress" and kwargs["prompt_status"] == "unknown":
+                raise sessions.SessionError("session_store_error", "checkpoint unavailable")
+            return original(session_id, **kwargs)
+        with mock.patch("router.dispatch.sessions.update", side_effect=fail):
+            error = self.failure("session_store_error", "prompt", "not_sent")
+        self.assertIsNone(error.session_warning)
+        self.agent_prompt.assert_not_called()
+        self.agent_wait.assert_not_called()
+
+    def test_failed_confirmation_checkpoint_warns_and_still_waits(self):
+        original = sessions.update
+        def fail(session_id, **kwargs):
+            if kwargs["status"] == "in_progress" and kwargs["prompt_status"] == "confirmed":
+                raise sessions.SessionError("session_store_busy", "checkpoint unavailable")
+            return original(session_id, **kwargs)
+        for wait in (False, True):
+            with self.subTest(wait=wait):
+                self.agent_wait.reset_mock()
+                with mock.patch("router.dispatch.sessions.update", side_effect=fail):
+                    result = self.invoke(wait=wait)
+                self.assertEqual(result.prompt_status, "confirmed")
+                self.assertIn("session_store_busy", result.session_warning)
+                stored = sessions.get(result.session_id)
+                self.assertEqual((stored["status"], stored["prompt_status"]), ("confirmed", "confirmed"))
+                self.assertEqual(self.records()[-1]["session_warning"], result.session_warning)
+                if wait:
+                    self.agent_wait.assert_called_once_with("r-test-1", timeout_ms=None)
+                else:
+                    self.agent_wait.assert_not_called()
+        self.assertEqual(self.agent_prompt.call_count, 2)
+
+    def test_confirmation_warning_survives_original_wait_timeout_and_terminal_update(self):
+        original = sessions.update
+        for terminal_fails in (False, True):
+            with self.subTest(terminal_fails=terminal_fails):
+                failure = herdr.HerdrError("timeout", "completion deadline")
+                self.agent_wait.side_effect = failure
+                self.agent_wait.reset_mock()
+                def fail(session_id, **kwargs):
+                    if kwargs["status"] == "in_progress" and kwargs["prompt_status"] == "confirmed":
+                        raise sessions.SessionError("session_store_busy", "confirmation unavailable")
+                    if terminal_fails and kwargs["status"] == "failed":
+                        raise sessions.SessionError("session_store_error", "terminal unavailable")
+                    return original(session_id, **kwargs)
+                with mock.patch("router.dispatch.sessions.update", side_effect=fail), \
+                        self.assertRaises(herdr.HerdrError) as caught:
+                    self.invoke(wait=True)
+                self.assertIs(caught.exception, failure)
+                self.assertEqual(failure.prompt_status, "confirmed")
+                self.assertIn("session_store_busy", failure.session_warning)
+                self.assertIn("checkpoint", failure.session_warning)
+                self.agent_wait.assert_called_once_with("r-test-1", timeout_ms=None)
+                self.assertEqual(self.records()[-1]["session_warning"], failure.session_warning)
+                self.assertEqual(self.records()[-1]["error"], "timeout")
+                if not terminal_fails:
+                    stored = sessions.get(failure.session_id)
+                    self.assertEqual((stored["status"], stored["prompt_status"]), ("failed", "confirmed"))
+
+    def test_real_lock_at_pre_prompt_checkpoint_keeps_busy_code_and_does_not_send(self):
+        conn = None
+        def hold_lock(*args):
+            nonlocal conn
+            conn = sqlite3.connect(Path(self.tmp) / "sessions.sqlite3")
+            conn.execute("BEGIN IMMEDIATE")
+        self.agent_start.side_effect = hold_lock
+        try:
+            with mock.patch.object(sessions, "BUSY_TIMEOUT_MS", 50), \
+                    self.assertRaises(herdr.HerdrError) as caught:
+                self.invoke()
+            failure = caught.exception
+            self.assertEqual((failure.code, failure.stage, failure.prompt_status),
+                             ("session_store_busy", "prompt", "not_sent"))
+            self.assertEqual(failure.pane_id, "new-pane")
+            self.assertIn("session_store_busy", failure.session_warning)
+            self.agent_prompt.assert_not_called()
+            self.agent_wait.assert_not_called()
+            self.assertEqual(len(self.records()), 1)
+            self.assertEqual(self.records()[0]["error"], "session_store_busy")
+        finally:
+            if conn is not None:
+                conn.close()
+        self.assertEqual(sessions.get(failure.session_id)["prompt_status"], "not_sent")
+
+    def test_terminal_store_failure_keeps_success_and_durable_confirmation_with_warning(self):
+        original = sessions.update
+        def fail(session_id, **kwargs):
+            if kwargs["stage"] == "complete":
+                raise sessions.SessionError("session_store_error", "private SQL details")
+            return original(session_id, **kwargs)
+        with mock.patch("router.dispatch.sessions.update", side_effect=fail):
+            result = self.invoke()
+        self.assertEqual(result.prompt_status, "confirmed")
+        self.assertIn("session_store_error", result.session_warning)
+        self.assertNotIn("private SQL", result.session_warning)
+        stored = sessions.get(result.session_id)
+        self.assertEqual((stored["stage"], stored["status"], stored["prompt_status"]),
+                         ("prompt", "in_progress", "confirmed"))
+        self.assertEqual(len(self.records()), 1)
+        self.assert_record(self.records()[0], "complete", "confirmed", "confirmed")
+
+    def test_terminal_store_failure_preserves_original_timeout_and_durable_delivery(self):
+        original = sessions.update
+        failure = herdr.HerdrError("timeout", "completion deadline")
+        self.agent_wait.side_effect = failure
+        def fail(session_id, **kwargs):
+            if kwargs["status"] == "failed":
+                raise sessions.SessionError("session_store_error", "terminal unavailable")
+            return original(session_id, **kwargs)
+        with mock.patch("router.dispatch.sessions.update", side_effect=fail), \
+                self.assertRaises(herdr.HerdrError) as caught:
+            self.invoke(wait=True)
+        self.assertIs(caught.exception, failure)
+        self.assertEqual(failure.prompt_status, "confirmed")
+        self.assertIn("session_store_error", failure.session_warning)
+        stored = sessions.get(failure.session_id)
+        self.assertEqual((stored["stage"], stored["status"], stored["prompt_status"]),
+                         ("wait", "in_progress", "confirmed"))
+        self.assertEqual(len(self.records()), 1)
+        self.assert_record(self.records()[0], "wait", "confirmed", "failed", "timeout")
+
+    def test_terminal_failure_preserves_interruptions_and_programming_errors(self):
+        original = sessions.update
+        def fail(session_id, **kwargs):
+            if kwargs["status"] == "failed":
+                raise sessions.SessionError("session_store_error", "terminal unavailable")
+            return original(session_id, **kwargs)
+        for failure in (KeyboardInterrupt(), SystemExit(7), ValueError("programming error")):
+            with self.subTest(error=type(failure).__name__):
+                self.agent_prompt.side_effect = failure
+                with mock.patch("router.dispatch.sessions.update", side_effect=fail), \
+                        self.assertRaises(type(failure)) as caught:
+                    self.invoke()
+                self.assertIs(caught.exception, failure)
+                self.assertEqual(failure.prompt_status, "unknown")
+                self.assertIn("session_store_error", failure.session_warning)
+                self.assertEqual(sessions.get(failure.session_id)["prompt_status"], "unknown")
+        self.assertEqual(len(self.records()), 3)
+
+    def test_direct_prompt_validation_rejects_invalid_text_without_herdr_calls(self):
+        for prompt in ("task\0argument", "invalid\ud800text"):
+            with self.subTest(prompt=ascii(prompt)):
+                self.d.prompt = prompt
+                count = len(self.records())
+                with self.assertRaises(herdr.HerdrError) as caught:
+                    self.invoke()
+                self.assertEqual(caught.exception.code, "invalid_prompt")
+                self.assertEqual(caught.exception.prompt_status, "not_sent")
+                self.assertNotIn(prompt, str(caught.exception))
+                self.assertEqual(self.calls.mock_calls, [])
+                self.assertEqual(len(self.records()), count + 1)
+                self.assertEqual(self.records()[-1]["error"], "invalid_prompt")
+
+    def test_direct_prompt_limit_is_utf8_bytes_and_inclusive(self):
+        self.d.prompt = "中" * 21845 + "xx"  # 65537 bytes
+        error = self.failure("prompt_too_large", "prepare", pane_id=None, agent=None)
+        self.assertIsNotNone(error.session_id)
+        self.assertEqual(self.calls.mock_calls, [])
+        self.d.prompt = "中" * 21845 + "x"  # 65536 bytes
+        self.assertEqual(self.invoke().prompt_status, "confirmed")
+
+    def test_continuation_uses_new_attempt_pane_and_immutable_handoff_snapshot(self):
+        parent = self.invoke()
+        parent_record = sessions.get(parent.session_id)
+        source = Path(self.tmp) / "handoff.md"
+        source.write_text("summary", encoding="utf-8")
+        self.split.return_value = "child-pane"
+        child = self.invoke(parent_id=parent.session_id, phase="review", task="review task",
+                            handoff={"path": str(source), "text": source.read_text()})
+        self.assertNotEqual(child.session_id, parent.session_id)
+        self.assertEqual(child.pane_id, "child-pane")
+        self.assertEqual(self.split.call_count, 2)
+        self.agent_prompt.assert_called_with("r-test-1", self.d.prompt, wait=True,
+                                             until=("working", "blocked"), timeout_ms=15000)
+        source.write_text("changed summary", encoding="utf-8")
+        record = sessions.get(child.session_id)
+        self.assertEqual((record["parent_id"], record["phase"], record["task"]),
+                         (parent.session_id, "review", "review task"))
+        self.assertEqual(record["handoff"]["text"], "summary")
+        self.assertEqual(sessions.get(parent.session_id), parent_record)
+        self.assertEqual((self.records()[-1]["parent_id"], self.records()[-1]["phase"]),
+                         (parent.session_id, "review"))
+
+    def test_real_process_exit_during_prompt_leaves_unknown_and_readers_do_not_recover(self):
+        session_id = str(uuid.uuid4())
+        marker = Path(self.tmp) / "prompt-calls"
+        script = """
+import os, sys, uuid
+from pathlib import Path
+from unittest import mock
+from router import herdr
+from router.dispatch import dispatch
+from router.score import Decision
+def die(*args, **kwargs):
+    Path(sys.argv[3]).write_text('once')
+    os._exit(23)
+decision = Decision('test', 'Test', 'codex', 'model', 'high', [], 'task', 'test', {})
+with mock.patch('router.dispatch.uuid.uuid4', return_value=uuid.UUID(sys.argv[1])), \
+     mock.patch('router.dispatch.agents.prepare'), \
+     mock.patch.object(herdr, 'split', return_value='crash-pane'), \
+     mock.patch.object(herdr, 'agent_start', return_value={}), \
+     mock.patch.object(herdr, 'agent_prompt', side_effect=die), \
+     mock.patch.object(herdr.subprocess, 'run', side_effect=AssertionError('real RPC forbidden')):
+    dispatch(decision, target_pane='source', cwd=sys.argv[2], name='chosen', direction='right')
+"""
+        child = _RUN_PROCESS([sys.executable, "-c", script, session_id, self.tmp, str(marker)],
+                               capture_output=True, text=True, timeout=15,
+                               env={**os.environ, "PYTHONDONTWRITEBYTECODE": "1"})
+        self.assertEqual(child.returncode, 23, child.stderr)
+        self.assertEqual(marker.read_text(), "once")
+        self.assertEqual(self.records(), [])
+        db = Path(self.tmp) / "sessions.sqlite3"
+        before = db.read_bytes(), db.stat().st_mtime_ns, sorted(Path(self.tmp).iterdir())
+        reader = """
+import json, sys
+from unittest import mock
+from router import herdr, sessions
+with mock.patch.object(herdr.subprocess, 'run', side_effect=AssertionError('real RPC forbidden')):
+    print(json.dumps({'record': sessions.get(sys.argv[1]), 'list': sessions.list_sessions()}))
+"""
+        reply = _RUN_PROCESS([sys.executable, "-c", reader, session_id], capture_output=True,
+                               text=True, timeout=15, env={**os.environ, "PYTHONDONTWRITEBYTECODE": "1"})
+        self.assertEqual(reply.returncode, 0, reply.stderr)
+        record = json.loads(reply.stdout)["record"]
+        self.assertEqual((record["stage"], record["status"], record["prompt_status"]),
+                         ("prompt", "in_progress", "unknown"))
+        self.assertEqual((record["agent"], record["pane_id"], record["error"]), ("chosen", "crash-pane", None))
+        self.assertEqual(sessions.get(session_id), record)
+        self.assertEqual(marker.read_text(), "once")
+        self.assertEqual((db.read_bytes(), db.stat().st_mtime_ns, sorted(Path(self.tmp).iterdir())), before)
 
 
 class HerdrCallTest(unittest.TestCase):

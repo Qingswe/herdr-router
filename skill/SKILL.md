@@ -62,6 +62,20 @@ Always inspect `prompt_status` before deciding what to do:
 
 `--wait` waits for a settled state after delivery confirmation; `--timeout <ms>` limits that extra wait. A blocked or settled state is not proof of task completion. The router never automatically resends a prompt or closes a pane it created after failure. A split communication error may have created a pane without returning its id: inspect Herdr before retrying that operation.
 
+## Sessions
+
+Each real dispatch saves a Session; `session_id` equals `dispatch_id`. Inspect it without contacting Herdr:
+
+```bash
+herdr-router session list --json
+herdr-router session show <session-id> --json
+herdr-router dispatch "<next task>" --session <session-id> --handoff handoff.md --phase review --json
+```
+
+Before continuing, inspect the prior result and confirm its work has finished. Continuation requires confirmed parent delivery and a handoff file; it creates a new pane and attempt linked by `parent_id`, inheriting the parent's cwd. An explicitly different cwd is rejected. The previous conversation is not automatically available. Write decisions, relevant file paths, completed checks and remaining work in an ordinary UTF-8 handoff file (up to 48 KiB). Only the new task is routed; the copied handoff is added afterward. Final prompts are limited to 64 KiB. `--dry-run` creates no Session or pane.
+
+`in_progress` means no terminal state was recorded, including after a crash; it is not evidence of a live agent. A `session_warning` means the final storage update failed, while `prompt_status` still describes actual delivery. Inspect the original pane/log and never retry automatically.
+
 ## Tuning
 
 Profiles and dimensions live in a policy the user edits in a web UI (`herdr-router ui`, or the Herdr action `herdr-router.open-editor`). If the user disagrees with a routing choice, point them there rather than overriding silently.
