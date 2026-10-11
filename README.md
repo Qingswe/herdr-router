@@ -1,45 +1,73 @@
 # herdr-router
 
-herdr-router chooses a coding agent, model, and reasoning effort for a task,
-then starts that agent in a new [Herdr](https://herdr.dev) pane and sends it
-the task.
+herdr-router decides which coding agent, model, and reasoning effort should
+handle a task, then starts that agent in a new [Herdr](https://herdr.dev) pane
+and sends it the task.
 
-It estimates how hard and how long the task is, and what kind of work it is,
-then picks the closest match from a list of profiles such as "Codex with
-GPT-6.1 Sol at medium effort" or "Claude Code with Opus at xhigh". The profiles
-live in a JSON policy that you edit in a local web editor.
+If you run several coding agents, picking one for every task by hand gets
+tedious, and the defaults are often wrong in both directions: a strong model at
+high effort spends quota on a one-line rename, and a small model fails at a
+design problem. herdr-router makes that choice from a policy you can see and
+edit, and explains each decision.
 
-<table>
-  <tr>
-    <td width="50%" valign="top">
-      <a href="plans/ui-refresh-evidence/desktop-chart-editor.png"><img src="plans/ui-refresh-evidence/desktop-chart-editor.png" alt="Routing map with profile dots over a shaded background showing which profile wins each area, and the editor for the selected Sol medium profile" width="100%"></a>
-    </td>
-    <td width="50%" valign="top">
-      <a href="plans/ui-refresh-evidence/desktop-settings.png"><img src="plans/ui-refresh-evidence/desktop-settings.png" alt="Settings tab with scoring penalties, per-agent cost factors, the Jev backend, dispatch options, and aliases" width="100%"></a>
-    </td>
-  </tr>
-  <tr>
-    <td valign="top">Routing map and profile editor. Drag a profile to change which tasks it gets.</td>
-    <td valign="top">Settings: penalties, costs, the assessment backend, and aliases.</td>
-  </tr>
-</table>
+![Routing map: profile dots placed by difficulty and duration, with the background shaded by the profile that wins each area](docs/images/routing-map.png)
 
-The screenshots use the Chinese interface; the editor also has English. Click
-an image for full size.
+*The routing map in the web editor. Each dot is a profile; the shading shows
+which profile a task at that difficulty and duration would go to.*
+
+## How it works
+
+1. **Assess the task.** The task text is scored on a set of dimensions:
+   difficulty, duration, scope, and task type by default. This uses the free
+   `jev-1.13-free` model on OpenCode Zen (no API key), with English and Chinese
+   keyword rules as an offline fallback.
+2. **Pick a profile.** A profile is an agent, model, and effort with a position
+   on those dimensions, for example Codex with GPT-6.1 Sol at medium effort.
+   Each profile gets a penalty for being too weak, being more than the task
+   needs, mismatching the task type, and its price and time per task. The
+   lowest penalty wins.
+3. **Dispatch in Herdr.** The router splits the current pane, starts the chosen
+   agent with the right model and effort flags, sends the task, and waits until
+   Herdr sees the agent working or blocked.
+
+## Features
+
+- **Routing is data, not code.** Dimensions, profiles, weights, and aliases live
+  in one JSON policy. Adding a dimension needs no code change.
+- **Territory map with draggable profiles.** The editor shades the plane by the
+  winning profile, computed by the same scoring code the CLI uses. Drag a dot
+  and the map updates.
+- **Decisions you can inspect.** `route --json` shows the full ranking and each
+  profile's penalty breakdown. The editor's trial run does the same against
+  unsaved changes, without starting anything.
+- **Several agent CLIs.** Claude Code, Codex, Cursor, Kimi, OpenCode, and Droid,
+  each with its own model and effort flags. The same model can be switched
+  between agents that can run it.
+- **Your call wins.** `@opus` or `@<profile-id>` in the task pins a profile,
+  `!hard` or `!duration=3` pins a dimension, and `--profile`, `--kind`,
+  `--model`, `--effort` do the same from the command line.
+- **Careful delivery.** Each dispatch reports whether the task was `not_sent`,
+  `unknown`, or `confirmed`, and the router never resends a prompt on its own.
+- **Sessions, handoff, and worktrees.** Dispatches are recorded in a local
+  SQLite database. A follow-up task can continue a session in a new pane with a
+  handoff file, and `--isolation worktree` runs a task on its own Git branch and
+  working tree.
+- **Small footprint.** Python standard library only, no frontend build. The
+  editor runs locally in English or Chinese, needs a token, and cannot dispatch
+  agents.
+
+The bundled policy is derived from [Artificial Analysis](https://artificialanalysis.ai/)
+benchmark, price, and time data; the [guide](docs/guide.md#the-default-policy)
+explains how.
 
 ## Requirements
 
-- macOS or Linux, with Python 3.11 or newer available as `python3`. No Python
-  packages or build step are needed.
+- macOS or Linux, with Python 3.11 or newer available as `python3`.
 - [Herdr](https://herdr.dev), tested with 0.9.3. Dispatching only works from
   inside a Herdr pane.
 - At least one agent CLI used by the enabled profiles, such as Codex, Claude
   Code, or OpenCode, installed and signed in. The router only checks that the
   binary is on `PATH`; model access depends on that CLI's account.
-
-Tasks are assessed by the free `jev-1.13-free` model on OpenCode Zen, which
-needs no API key. If that call fails, keyword rules (English and Chinese) are
-used instead.
 
 ## Install
 
@@ -85,11 +113,9 @@ herdr-router dispatch "@opus review the session schema"    # pin a profile by al
 herdr-router dispatch "..." --dry-run                      # decide and validate only
 ```
 
-The router splits the current pane, starts the agent, sends the task, and waits
-until Herdr reports the agent as working or blocked. If a dispatch fails, read
-`prompt_status` before retrying: `unknown` or `confirmed` means the task may
-already have arrived, so look at the pane instead of sending it again. See
-[Dispatch and recovery](docs/guide.md#dispatch-and-recovery).
+If a dispatch fails, read `prompt_status` before retrying: `unknown` or
+`confirmed` means the task may already have arrived, so look at the pane instead
+of sending it again. See [Dispatch and recovery](docs/guide.md#dispatch-and-recovery).
 
 Open the web editor:
 
@@ -99,8 +125,7 @@ herdr-router ui --stop     # stop an editor the plugin started in the background
 ```
 
 Saving writes `~/.config/herdr/plugins/config/herdr-router/policy.json` and
-keeps the last 10 versions. The editor can change launch settings but cannot
-start agents.
+keeps the last 10 versions.
 
 Linking the plugin also adds Herdr actions for a routing popup, routing the
 selected text, and opening the editor. The [guide](docs/guide.md#herdr-plugin-actions)
@@ -108,10 +133,9 @@ has a keybinding example.
 
 ## More
 
-The [user guide](docs/guide.md) covers how scoring works, how the default policy
-was derived from Artificial Analysis data, the policy file, sessions and
-handoff, worktree isolation, editor details, file locations, and
-troubleshooting.
+The [user guide](docs/guide.md) covers the scoring formula, the default policy,
+the policy file, sessions and handoff, worktree isolation, the editor tabs, file
+locations, and troubleshooting.
 
 Run the tests with:
 

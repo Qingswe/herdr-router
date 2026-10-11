@@ -276,11 +276,12 @@ herdr-router ui --stop           # stop a background editor started by the plugi
 The editor is in English or Chinese, chosen from the browser language.
 **Settings → Language** overrides that and is remembered in the browser.
 Switching keeps the draft and trial results. Labels inside the policy stay as
-written. The screenshots below use the Chinese interface.
+written. Each section below links a full-page screenshot of that tab, taken
+with the Chinese interface.
 
 ### Routing map and profile editor
 
-![Routing map with the territory background and the profile editor for Sol medium](../plans/ui-refresh-evidence/desktop-chart-editor.png)
+Screenshot: [routing map and profile editor](../plans/ui-refresh-evidence/desktop-chart-editor.png).
 
 The map plots profiles over any two score dimensions, filtered by task type.
 The background shows which profile would win a task at each point, with thin
@@ -306,7 +307,7 @@ see the winner and runner-ups with their penalties.
 
 ### Dimensions
 
-![Dimensions tab with difficulty, duration, scope, and task type](../plans/ui-refresh-evidence/desktop-dimensions.png)
+Screenshot: [dimensions tab](../plans/ui-refresh-evidence/desktop-dimensions.png).
 
 Add, remove, reorder, or rename dimensions, and edit their question, levels or
 options, and weight. Each dimension becomes one question to the assessment
@@ -315,7 +316,7 @@ to it.
 
 ### Trial run
 
-![Trial run result for a bug-fix task, with penalty bars for the top five profiles](../plans/ui-refresh-evidence/desktop-trial.png)
+Screenshot: [trial run result](../plans/ui-refresh-evidence/desktop-trial.png).
 
 Type a task (multi-line is fine; ⌘/Ctrl+Enter runs it) or pick an example. The
 result shows the chosen model, agent, and effort, the penalty breakdown, and
@@ -326,7 +327,7 @@ policy marks an earlier result as stale.
 
 ### Settings and JSON
 
-![Settings tab with scoring weights, backend, dispatch options, and aliases](../plans/ui-refresh-evidence/desktop-settings.png)
+Screenshot: [settings tab](../plans/ui-refresh-evidence/desktop-settings.png).
 
 Settings holds the penalty and cost knobs, the assessment backend, dispatch
 direction and start timeout, `@` aliases, and `!` dimension shortcuts. The JSON
