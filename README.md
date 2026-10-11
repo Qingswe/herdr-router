@@ -10,7 +10,7 @@ high effort spends quota on a one-line rename, and a small model fails at a
 design problem. herdr-router makes that choice from a policy you can see and
 edit, and explains each decision.
 
-![Routing map: profile dots placed by difficulty and duration, with the background shaded by the profile that wins each area](docs/images/routing-map.png)
+![Routing map: profile dots placed by difficulty and duration, with the background shaded by the profile that wins each area](docs/images/routing-map-en.png)
 
 *The routing map in the web editor. Each dot is a profile; the shading shows
 which profile a task at that difficulty and duration would go to.*
