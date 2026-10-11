@@ -42,7 +42,7 @@ router/
   agents.py     (kind, model, effort) → 各 agent CLI 的原生参数
   catalog.py    各 kind 可选模型（claude 静态别名、codex 读 models_cache.json、cursor 跑 --list-models 并缓存 24h）
   herdr.py      herdr CLI 的薄封装（全部走 subprocess + JSON）
-  dispatch.py   Decision → split pane → agent start → agent prompt → 写日志
+  dispatch.py   Decision → prepare / name → split pane → start → 确认送达 → 可选 wait → 终态日志
   log.py        decisions.jsonl 追加（失败静默）
   cli.py        argparse 子命令、终端渲染、popup、插件 action
   web.py        本地网页服务（ThreadingHTTPServer）
@@ -77,6 +77,10 @@ Decision{profile_id, kind, model, effort, args, prompt, reason, assessment, rank
   ▼
 herdr pane split → herdr agent start <name> --kind K --pane P -- <args> → herdr agent prompt
 ```
+
+派发先用 `agent prompt --wait --until working --until blocked --timeout 15000` 确认活动；stalled 时只补充一次 `agent wait` 观察 working/blocked，不重发。用户 `--wait` 的结束等待在确认后单独执行，且不传 `--until settled`（Herdr 没有这个状态）。等待结束超时仍保留 `prompt_status=confirmed`。
+
+每次调用 `dispatch()` 有 `dispatch_id`，finally 写一条终态记录（`event=dispatch`，保留旧字段），补充 `stage/status/prompt_status`。`not_sent` 是确定未发送，`unknown` 是可能已送达但无法确认，`confirmed` 是观察到提交后的活动。失败 `HerdrError` 带已知 pane/agent 和这些字段。CLI `--json` 成功 stdout 只有一个对象，失败 stdout 空、stderr 结构化错误；不要仅凭 exit 1 判断可以重试。
 
 ### 打分公式（score.penalty，越低越好）
 
@@ -181,7 +185,7 @@ p=model.load(); print(json.dumps(classify.systemone_request('把这个变量重�
 - `agent_not_ready`：agent 启动时被弹窗卡住（比如信任目录对话框），pane 和名字仍然存活，用 `herdr agent read <name>` 看界面，**问用户**再决定按什么键。
 - 档位"not on PATH"：`policy.env.extra_path` 会在启动时追加到 PATH；`binaries` 把 kind 映射到实际可执行名（cursor → cursor-agent）。
 - 每次 dispatch 的完整 Decision 都在 `decisions.jsonl` 里，出错的那条带 `"error"`。
-- **看日志要看 `error` 字段**：`timeout` / `agent_not_ready` 表示 agent 没就绪、任务没发出（pane 还开着）。最常见的原因是 agent 启动时弹窗：Codex 的更新提示（`Update available … 1. Update now (runs npm install -g)`）、信任目录对话框。弹窗里的「更新」会改用户的全局安装，**不要替用户按**，让用户选。popup 现在会在失败时把那个 pane 的画面打出来。
+- **看日志同时看 `error/stage/prompt_status`**：启动失败通常是 `not_sent`；prompt 阶段超时或 stalled 可能已送达，是 `unknown`；确认后结束等待失败仍是 `confirmed`。后两种必须先查看原 pane，不要重新派发。启动弹窗常见于 Codex 更新提示（`Update available … 1. Update now (runs npm install -g)`）和信任目录对话框。弹窗里的「更新」会改用户的全局安装，**不要替用户按**，让用户选。popup 失败会显示恢复建议与已知 pane 的画面。
 
 **网页打不开 / 报错**
 - `{"error":"token required"}` 或「链接里的令牌不对」页：链接被截断（窄 pane 折行）或服务重启后令牌变了 → 用 `herdr-router ui --open`。令牌在 `state/ui-token`。
@@ -225,7 +229,7 @@ p=model.load(); print(json.dumps(classify.systemone_request('把这个变量重�
 - Herdr 0.9.3。CLI 语法以 `herdr --help` / `herdr agent` / `herdr pane` 的输出为准。
 - 只在 `HERDR_ENV=1` 时操作 Herdr；默认 `--no-focus`，不要关闭不是自己创建的 pane / tab / workspace，不要 `herdr server stop`。
 - `agent start` 只能用于停在 shell 提示符的空 pane；router 总是先 `pane split` 出新 pane 再启动。
-- agent 名字规则 `[a-z][a-z0-9_-]{0,31}`，router 生成 `r-<model或kind>-N`（`herdr.unique_agent_name`）。
+- agent 名字规则 `[a-z][a-z0-9_-]{0,31}`，router 默认名称含 `dispatch_id` 短后缀，再由 `herdr.unique_agent_name` 避免已存在的名称；命名和校验在 split 前完成。
 
 ## 已知限制 / 待办
 

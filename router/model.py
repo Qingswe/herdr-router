@@ -246,6 +246,24 @@ def validate(policy: dict, kinds: list[str] | None = None) -> list[dict]:
     be = policy.get("backend", {})
     if be.get("enabled") and not str(be.get("base_url", "")).startswith(("http://", "https://")):
         err("backend.base_url", "base_url must be an http(s) URL")
+
+    # Validate launch settings before a saved policy can create a pane.
+    for path, message in validate_dispatch(policy):
+        err(path, message)
+    return errs
+
+
+def validate_dispatch(policy: dict) -> list[tuple[str, str]]:
+    """The launch boundary also checks policies loaded directly from disk."""
+    errs = []
+    cfg = policy.get("dispatch", {})
+    if not isinstance(cfg, dict):
+        return [("dispatch", "dispatch must be an object")]
+    if cfg.get("direction", "auto") not in ("auto", "right", "down"):
+        errs.append(("dispatch.direction", "direction must be auto, right, or down"))
+    value = cfg.get("agent_start_timeout_ms", 60000)
+    if type(value) is not int or not 1000 <= value <= 300000:
+        errs.append(("dispatch.agent_start_timeout_ms", "must be an integer between 1000 and 300000"))
     return errs
 
 

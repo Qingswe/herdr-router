@@ -28,7 +28,7 @@ herdr-router route "<task>" --json     # full ranking
 herdr-router dispatch "<task>" --json
 ```
 
-This splits the calling pane (`--no-focus`), starts the chosen agent with its model and effort flags, and submits the task. The JSON reply carries `agent` (a live Herdr agent name), `pane_id`, and the full `decision`. Then continue with the herdr skill:
+This splits the calling pane (`--no-focus`), starts the chosen agent with its model and effort flags, submits the task once, and confirms Herdr observed `working` or `blocked`. The JSON reply carries `agent` (a live Herdr agent name), `pane_id`, `dispatch_id`, `stage`, `prompt_status`, and the full `decision`. `confirmed` means activity was observed; it does not prove the task succeeded. Then continue with the herdr skill:
 
 ```bash
 herdr agent wait <agent> --timeout 600000
@@ -53,7 +53,14 @@ Errors are JSON on stderr with exit 1.
 - `no_agent_available`: no enabled profile has its CLI installed (or the pinned one is missing). Report it; do not guess another agent.
 - `not_in_herdr`: you are not inside a Herdr pane.
 
-Do not retry a failed dispatch blindly. A timeout does not prove the prompt was never delivered.
+On success stdout contains only one JSON object; on failure stdout is empty. Failure JSON includes known `agent`, `pane_id`, `dispatch_id`, `stage`, and a recovery message. An error before dispatch begins has no dispatch id.
+
+Always inspect `prompt_status` before deciding what to do:
+- `not_sent`: fix the error and inspect any retained pane before trying to send work.
+- `unknown`: the task may already be running. Read the named agent/pane; do not resubmit automatically.
+- `confirmed`: activity was observed, including when a later `--wait` times out. Read the existing agent; do not resubmit.
+
+`--wait` waits for a settled state after delivery confirmation; `--timeout <ms>` limits that extra wait. A blocked or settled state is not proof of task completion. The router never automatically resends a prompt or closes a pane it created after failure. A split communication error may have created a pane without returning its id: inspect Herdr before retrying that operation.
 
 ## Tuning
 

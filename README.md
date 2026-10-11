@@ -58,6 +58,22 @@ herdr-router classify "设计状态同步架构"            # raw per-dimension 
 
 Every dispatch is appended to `~/.local/state/herdr/plugins/herdr-router/decisions.jsonl`. The editor plots these entries on the chart.
 
+Dispatch confirms that Herdr observed agent activity (`working` or `blocked`) before reporting delivery. A blocked agent has received the task but may need your input. `--wait` then waits separately for a settled state; `--timeout <ms>` limits that additional wait. Neither delivery confirmation nor a settled state proves that the task's acceptance checks passed.
+
+`dispatch --json` writes one JSON object to stdout on success. On failure it exits 1, leaves stdout empty, and writes an error object to stderr. Both outcomes carry `dispatch_id`, `stage`, `prompt_status`, `agent`, and `pane_id` when known; a failure before an attempt starts has no dispatch id. The three delivery states are:
+
+| `prompt_status` | Meaning | Recovery |
+| --- | --- | --- |
+| `not_sent` | No task was submitted, or Herdr explicitly rejected it before writing | Fix the error and inspect any retained pane before sending a task |
+| `unknown` | The task may have arrived, but activity could not be confirmed | Inspect the named agent/pane; do not dispatch the same task again blindly |
+| `confirmed` | Herdr confirmed activity after submission | Do not resubmit; a later `--wait` timeout keeps this state |
+
+The router never resends a prompt automatically. If the initial activity check stalls, it observes `working`/`blocked` once more without submitting again. Failures and interruptions keep known pane/agent identifiers in the decision log; created panes stay open for inspection. A split communication error can leave a pane whose id was not returned, so check Herdr before retrying it.
+
+Launch policy settings are checked before opening a pane: `dispatch.direction` is `auto`, `right`, or `down`, and `agent_start_timeout_ms` is an integer from 1000 to 300000.
+
+The next-stage plan and technology-stack assessment are in [plans/router-evolution.md](plans/router-evolution.md).
+
 ## Web editor
 
 ```bash
