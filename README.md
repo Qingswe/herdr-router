@@ -127,9 +127,42 @@ herdr-router ui --stop     # stop an editor the plugin started in the background
 Saving writes `~/.config/herdr/plugins/config/herdr-router/policy.json` and
 keeps the last 10 versions.
 
-Linking the plugin also adds Herdr actions for a routing popup, routing the
-selected text, and opening the editor. The [guide](docs/guide.md#herdr-plugin-actions)
-has a keybinding example.
+## Herdr shortcuts
+
+After linking the plugin, add these bindings to `~/.config/herdr/config.toml`
+(choose other keys if these are already in use):
+
+```toml
+[[keys.command]]
+key = "prefix+d"
+type = "plugin_action"
+command = "herdr-router.route"
+
+[[keys.command]]
+key = "prefix+ctrl+d"
+type = "plugin_action"
+command = "herdr-router.route-selection"
+
+[[keys.command]]
+key = "prefix+shift+e"
+type = "plugin_action"
+command = "herdr-router.open-editor"
+```
+
+Run `herdr server reload-config` to apply them. `prefix` means your configured
+Herdr prefix key: press it first, then the key below. Linking the plugin alone
+does not install these bindings.
+
+| After the prefix | Action |
+|---|---|
+| `d` | Open the router popup for the focused pane |
+| `Ctrl+d` | Open the popup with selected terminal text as the task |
+| `Shift+e` | Open the local web editor |
+
+In the popup, enter a task and press Enter to see the recommendation. Press
+Enter again to dispatch it in a new pane. To adjust it, type `k` (profile),
+`m` (model), `e` (effort), or `t` (task), then press Enter; type `q` and press
+Enter to cancel. The [guide](docs/guide.md#herdr-plugin-actions) has more details.
 
 ## More
 

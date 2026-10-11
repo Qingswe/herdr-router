@@ -362,9 +362,10 @@ agents.
 
 ## Herdr plugin actions
 
-- `herdr-router.route` opens a popup. Type a task, review the ranking, and
-  press Enter to dispatch. Use `k`, `m`, and `e` to change the profile, model,
-  or effort. The popup closes about a second after a successful dispatch; a
+- `herdr-router.route` opens a popup. Type a task and press Enter to see the
+  ranking, then press Enter again to dispatch. Type `k`, `m`, or `e` and press
+  Enter to change the profile, model, or effort; `t` edits the task and `q`
+  cancels. The popup closes about a second after a successful dispatch; a
   failure stays on screen with recovery hints until you press Enter. It exits
   on its own after 300 seconds of inactivity.
 - `herdr-router.route-selection` does the same with the selected terminal text
@@ -372,15 +373,32 @@ agents.
 - `herdr-router.open-editor` starts the editor in the background if needed and
   opens it in the browser. Its log is `ui.log` in the state directory.
 
-Keybinding example for `~/.config/herdr/config.toml` (then run
-`herdr server reload-config`):
+Keybinding examples for `~/.config/herdr/config.toml` (choose unused keys,
+then run `herdr server reload-config`). Linking the plugin registers its
+actions; it does not add these bindings automatically:
 
 ```toml
 [[keys.command]]
-key = "cmd+shift+r"
+key = "prefix+d"
 type = "plugin_action"
 command = "herdr-router.route"
+
+[[keys.command]]
+key = "prefix+ctrl+d"
+type = "plugin_action"
+command = "herdr-router.route-selection"
+
+[[keys.command]]
+key = "prefix+shift+e"
+type = "plugin_action"
+command = "herdr-router.open-editor"
 ```
+
+Press your configured Herdr prefix key first, then `d` to enter a task,
+`Ctrl+d` to use selected terminal text, or `Shift+e` to open the editor. The
+router targets the focused pane and its working directory. For selected text,
+select it in the terminal before invoking the action; the popup starts with
+that task ready for review.
 
 ## Policy file
 
