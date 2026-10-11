@@ -68,8 +68,12 @@ herdr-router ui --stop     # stop a background editor started by the plugin acti
 
 - **路由图** (routing map): a dark scatter chart over any two score dimensions. Each profile is a labelled dot at its point, coloured by agent vendor, and can be dragged **anywhere** (snaps to 0.05). Hollow dots are specialists (for example "仅 review"), dashed ones are not installed; a profile that ignores one axis is a dashed line along it, and one that ignores both is listed under the chart. The background is the **territory map**: the plane is tinted by the profile that would win a task there, with thin borders where the winner changes. It is computed server-side by `score.territory` (so it always matches real routing), coarse while you drag and fine once you drop. Hover anywhere to see the winner and runner-ups with their penalties. The type selector shows territories for one task type. The command bar on top runs a trial: the task's position is marked, the winner pulses, and the top five penalties plus the launch command appear below the chart. The side panel lists profiles grouped by agent with the share of the map each one wins (0% means it is completely shadowed). Selecting one edits it: model (dropdown from each CLI's model list: Claude aliases, `~/.codex/models_cache.json`, `cursor-agent --list-models`), effort limited to what that model supports, a slider per dimension with a "不挑" (does not care) switch, type affinity, and prompt prefix.
 - **维度** (dimensions): add, remove, reorder, or rename dimensions, and edit their question, levels or options, and weight. When a dimension loses levels, points above the new top level move down to it.
-- **试运行** (trial run): runs a task against the unsaved draft and shows each dimension's distribution and the full ranking with per-dimension penalties.
+- **试运行** (trial run): accepts multiline task descriptions (⌘/Ctrl+Enter to run) and examples. The recommendation shows model, agent, effort, actual penalty breakdown and the difference from the runner-up. Expand diagnostics for dimension distributions and the full ranking, or copy the shell-quoted startup command. Trials use a snapshot of the unsaved draft; changing the task, assessment mode or policy marks the previous result as stale.
 - **设置 / JSON** (settings / JSON): penalty knobs, backend, aliases, and raw JSON for the rest.
+
+The profile list supports text search and status filters (enabled, disabled, missing CLI, or zero coverage in the current map slice). History, disabled profiles and labels have separate display controls; hiding a profile on the chart does not disable routing. Coverage describes only the selected two-dimensional slice, not real task frequency or overall usefulness. The profile editor groups basic information, coordinates, task affinity and advanced parameters, with numeric coordinate inputs alongside sliders.
+
+Undo/redo retains the last 100 draft operations; a continuous field edit or chart drag is one operation. Use the buttons or ⌘/Ctrl+Z and ⌘/Ctrl+Shift+Z in policy fields (task and JSON text editors keep native text undo). **放弃修改** restores the last acknowledged saved policy and can itself be undone. Saving acknowledges the submitted snapshot: edits made while the request is in flight remain unsaved. A draft summary lists the changed profiles and policy sections.
 
 Saving validates the policy on the server, keeps the last 10 versions in `policy.backups/`, and writes `~/.config/herdr/plugins/config/herdr-router/policy.json`. The file is replaced atomically. The CLI reads the policy on every run, so changes apply immediately.
 
@@ -130,6 +134,7 @@ Agent flags (checked against each CLI's `--help`):
 
 ```bash
 python3 -m unittest discover -s tests -t .
+node tests/test_frontend.js
 ```
 
 `tests/fixtures/` holds recorded `jev-1.13-free` responses. They are regression cases that pin the default policy's routing.

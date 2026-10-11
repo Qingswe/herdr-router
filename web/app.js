@@ -22,9 +22,10 @@ const S = {
   policy: null, base: "", source: "", path: "", installed: {}, models: {}, defaults: null,
   tab: "chart", sel: null, axes: { x: null, y: null }, choice: {},
   map: null, mapKey: "",
-  log: [], showLog: true, hidden: new Set(),
-  trial: null, trialTask: "", useBackend: true, trialBusy: false,
-  errors: [],
+  log: [], showLog: true, showDisabled: true, showLabels: true, hidden: new Set(),
+  search: "", filter: "all",
+  trial: null, trialTask: "", trialContext: null, useBackend: true, trialBusy: false,
+  saveBusy: false, errors: [], errorPolicy: "",
 };
 
 // ---------------------------------------------------------------- data helpers
@@ -56,6 +57,50 @@ function specialty(p) {
 const isDirty = () => JSON.stringify(S.policy) !== S.base;
 const clone = (o) => JSON.parse(JSON.stringify(o));
 function uniqueId(base, taken) { let i = 1, id = base; while (taken.includes(id)) id = `${base}-${++i}`; return id.slice(0, 32); }
+
+// History tracks the draft, independently of the acknowledged save baseline.
+// An input element or a drag object is the transaction key; discrete actions have no key.
+const H = { past: [], future: [], current: "", group: null, limit: 100 };
+function remember(group = null) {
+  const next = JSON.stringify(S.policy);
+  if (next === H.current) return false;
+  if (!group || H.group !== group) {
+    H.past.push(H.current);
+    if (H.past.length > H.limit) H.past.shift();
+  }
+  H.current = next; H.group = group; H.future = [];
+  return true;
+}
+function historyStep(redo = false) {
+  if (drag) return;
+  const from = redo ? H.future : H.past, to = redo ? H.past : H.future;
+  if (!from.length) return;
+  clearTimeout(changeTimer); pendingChange = {};
+  to.push(H.current); H.current = from.pop(); H.group = null;
+  S.policy = JSON.parse(H.current); fixAxes(); fixChoice();
+  if (!selProfile()) S.sel = null;
+  S.errors = []; S.errorPolicy = "";
+  render();
+}
+function fixChoice() {
+  for (const id of Object.keys(S.choice)) {
+    const d = dimById(id);
+    if (!d || d.type !== "choice" || !(S.choice[id] in d.options)) delete S.choice[id];
+  }
+}
+function changeSummary() {
+  const base = JSON.parse(S.base), before = new Map((base.profiles || []).map((p) => [p.id, p]));
+  let added = 0, edited = 0;
+  for (const p of profiles()) {
+    if (!before.has(p.id)) added++;
+    else { if (JSON.stringify(p) !== JSON.stringify(before.get(p.id))) edited++; before.delete(p.id); }
+  }
+  const parts = [added && `新增 ${added} 个档位`, edited && `修改 ${edited} 个档位`, before.size && `移除 ${before.size} 个档位`].filter(Boolean);
+  for (const [key, label] of [["dimensions", "维度"], ["aliases", "别名"], ["scoring", "打分参数"], ["backend", "决策模型"], ["dispatch", "派发参数"], ["models", "模型目录"], ["binaries", "CLI 映射"], ["env", "环境"]]) {
+    if (JSON.stringify(base[key]) !== JSON.stringify(S.policy[key])) parts.push(`${label}有修改`);
+  }
+  return parts.join(" · ") || (isDirty() ? "配置有修改" : "草稿与已保存版本一致");
+}
 
 // The policy's model catalog: model id -> {label, vendor, via: {kind: that agent's model id}}.
 // A profile's model entry is the one whose `via` for its kind is the profile's model.
@@ -99,7 +144,7 @@ function switchHarness(p, kind) {
   if (!e || !e.via[kind] || kind === p.kind) return;
   p.kind = kind; p.model = e.via[kind];
 }
-const harnessSeg = (p) => `<span class="seg harness">${harnesses(p).map((k) => `<button data-harness="${esc(k)}" class="${k === p.kind ? "on" : ""} ${S.installed[k] === false ? "warn" : ""}" title="${esc(k)}${S.installed[k] === false ? "（未安装）" : ""}">${esc(k)}</button>`).join("")}</span>`;
+const harnessSeg = (p) => `<span class="seg harness" role="group" aria-label="运行 Agent">${harnesses(p).map((k) => `<button data-harness="${esc(k)}" aria-pressed="${k === p.kind}" class="${k === p.kind ? "on" : ""} ${S.installed[k] === false ? "warn" : ""}" title="${esc(k)}${S.installed[k] === false ? "（未安装）" : ""}">${esc(k)}</button>`).join("")}</span>`;
 const swatch = (p) => `<span class="swatch ${specialty(p) ? "ring" : ""}" style="background:${color(p.id)};color:${color(p.id)}"></span>`;
 
 // ---------------------------------------------------------------- api
@@ -120,6 +165,7 @@ function toast(msg) {
 async function load() {
   const { body } = await api("/api/policy");
   S.policy = body.policy; S.base = JSON.stringify(body.policy);
+  H.current = S.base; H.past = []; H.future = []; H.group = null;
   S.source = body.source; S.path = body.path; S.installed = body.installed || {};
   const sd = dims("score").map((d) => d.id);
   if (!sd.includes(S.axes.x)) S.axes.x = sd.includes("duration") ? "duration" : sd[0];
@@ -130,9 +176,9 @@ async function load() {
   render();
   // a saved policy replaces the built-in default wholesale, so new default profiles never
   // show up by themselves; the profile list offers to add them
-  api("/api/policy/default").then(({ body: d }) => { S.defaults = d.policy || null; if (S.tab === "chart" && !S.sel) renderEditor(); }).catch(() => {});
+  api("/api/policy/default").then(({ body: d }) => { S.defaults = d.policy || null; if (S.tab === "chart" && !S.sel && !$("#editor")?.contains(document.activeElement)) renderEditor(); }).catch(() => {});
   // cursor-agent --list-models can take a few seconds on a cold cache; do not block the page on it
-  api("/api/models").then(({ body: m }) => { S.models = m.models || {}; if (S.tab === "chart" && S.sel) renderEditor(); }).catch(() => {});
+  api("/api/models").then(({ body: m }) => { S.models = m.models || {}; if (S.tab === "chart" && S.sel && !$("#editor")?.contains(document.activeElement)) renderEditor(); }).catch(() => {});
 }
 
 // ---------------------------------------------------------------- territory map
@@ -140,6 +186,7 @@ async function load() {
 // so the map always agrees with real routing. Refreshes are debounced while typing
 // and throttled while dragging, so the map follows a dot as it moves.
 let mapTimer, mapSeq = 0, mapBusy = false, mapAgain = false;
+const sliceKey = () => JSON.stringify({ policy: S.policy, x: S.axes.x, y: S.axes.y, choice: S.choice });
 function refreshMap(delay = 150) {
   clearTimeout(mapTimer);
   mapTimer = setTimeout(fetchMap, delay);
@@ -147,21 +194,23 @@ function refreshMap(delay = 150) {
 async function fetchMap() {
   // coarse while a dot is being dragged (fast enough to follow it), fine once it is dropped
   const req = JSON.stringify({ policy: S.policy, x: S.axes.x, y: S.axes.y, choice: S.choice, steps: drag ? 48 : 96 });
+  const key = sliceKey(), axes = { ...S.axes };
   if (req === S.mapKey) return;
   if (mapBusy) { mapAgain = true; return; }
   mapBusy = true;
   const seq = ++mapSeq;
   let res;
-  try { res = await api("/api/map", { method: "POST", body: req }); } catch { mapBusy = false; return; }
+  try { res = await api("/api/map", { method: "POST", body: req }); } catch { mapBusy = false; if (mapAgain) { mapAgain = false; refreshMap(); } return; }
   mapBusy = false;
-  if (seq === mapSeq) {
-    S.mapKey = req;
-    S.map = res.status === 200 ? { ...res.body, xd: S.axes.x, yd: S.axes.y, url: "", urlKey: "" } : null;
-    if (S.tab === "chart") { renderChart(); if (!S.sel) renderEditor(); }
+  if (seq === mapSeq && key === sliceKey()) {
+    S.mapKey = res.status === 200 ? req : "";
+    S.map = res.status === 200 ? { ...res.body, key, xd: axes.x, yd: axes.y, url: "", urlKey: "" } : null;
+    if (S.tab === "chart") { renderChart(); if (!S.sel) updateList(); }
   }
+  else mapAgain = true;
   if (mapAgain) { mapAgain = false; fetchMap(); }
 }
-const mapReady = () => S.map && S.map.xd === S.axes.x && S.map.yd === S.axes.y;
+const mapReady = () => S.map && S.map.key === sliceKey();
 function winnerAt(x, y) {
   if (!mapReady()) return null;
   const m = S.map, n = m.grid.length;
@@ -216,11 +265,12 @@ function mapImage(w, h) {
 // ---------------------------------------------------------------- top-level render
 function render() {
   if (!S.policy) return;
+  clearTimeout(changeTimer); pendingChange = {};
   document.querySelectorAll("#tabs button").forEach((b) => b.classList.toggle("on", b.dataset.tab === S.tab));
   renderStatus();
   renderErrors();
   const main = $("#main");
-  if (S.tab === "chart") main.innerHTML = `${cmdbarHtml()}<div class="split"><div><div class="card">${toolbarHtml()}<div id="chart"></div><div class="chips offplane" id="offplane"></div><div class="cellinfo" id="cellinfo"></div>${legendHtml()}</div><div id="trialbox">${trialBoxHtml()}</div></div><aside class="card" id="editor"></aside></div>`;
+  if (S.tab === "chart") main.innerHTML = `${cmdbarHtml()}<div id="trialbox">${trialBoxHtml()}</div><div class="split"><div class="card">${toolbarHtml()}<div id="chart"></div><div class="chips offplane" id="offplane"></div><div class="cellinfo" id="cellinfo"></div>${legendHtml()}</div><aside class="card" id="editor"></aside></div>`;
   if (S.tab === "dims") main.innerHTML = dimsHtml();
   if (S.tab === "trial") main.innerHTML = trialHtml();
   if (S.tab === "settings") main.innerHTML = settingsHtml();
@@ -231,37 +281,81 @@ function render() {
 function renderStatus() {
   $("#dirty").hidden = !isDirty();
   $("#source").textContent = S.source === "user" ? S.path.replace(/^\/(Users|home)\/[^/]+/, "~") : "内置默认值 · 保存后写入配置目录";
+  const revert = $("#btn-revert"), saveButton = $("#btn-save");
+  revert.textContent = "放弃修改"; revert.disabled = !isDirty() || S.saveBusy;
+  saveButton.disabled = S.saveBusy; saveButton.textContent = S.saveBusy ? "保存中…" : "保存";
+  if (!$("#draft-controls")) {
+    const box = document.createElement("div"); box.id = "draft-controls"; box.className = "row pad";
+    box.innerHTML = `<button id="btn-undo" title="撤销草稿操作（⌘/Ctrl+Z）；一次字段编辑或拖拽算一步，保留最近 100 步">撤销</button><button id="btn-redo" title="重做（⌘/Ctrl+Shift+Z）">重做</button><span id="draft-summary" class="hint change-summary" role="status"></span>`;
+    $("#main").before(box);
+  }
+  $("#btn-undo").disabled = !H.past.length || !!drag;
+  $("#btn-redo").disabled = !H.future.length || !!drag;
+  $("#draft-summary").textContent = changeSummary();
+  updateTrialValidity();
+}
+function updateTrialValidity() {
+  document.querySelectorAll("[data-stale]").forEach((el) => { el.hidden = !trialStale(); el.textContent = staleText(); });
+  document.querySelectorAll("[data-trial-validity]").forEach((el) => { el.textContent = trialStale() ? "上次试运行结果" : "推荐档位"; });
 }
 function renderErrors() {
   const box = $("#errors");
   box.hidden = !S.errors.length;
-  box.innerHTML = S.errors.length ? `<strong>有 ${S.errors.length} 处配置错误，未保存：</strong><ul>${S.errors.map((e, i) => `<li data-err="${i}"><code>${esc(e.path)}</code> ${esc(e.message)}</li>`).join("")}</ul>` : "";
+  box.innerHTML = S.errors.length ? `<strong>有 ${S.errors.length} 处配置错误：</strong><ul>${S.errors.map((e, i) => `<li><button class="ghost" data-err="${i}"><code>${esc(e.path)}</code> ${esc(e.message)}</button></li>`).join("")}</ul>` : "";
 }
 function markErrors() {
-  for (const e of S.errors) document.querySelectorAll(`[data-path="${CSS.escape(e.path)}"]`).forEach((el) => el.classList.add("err"));
+  document.querySelectorAll(".err[data-path]").forEach((el) => { el.classList.remove("err"); el.removeAttribute("aria-invalid"); });
+  for (const e of S.errors) document.querySelectorAll(`[data-path="${CSS.escape(e.path)}"]`).forEach((el) => { el.classList.add("err"); el.setAttribute("aria-invalid", "true"); });
 }
+let changeTimer, pendingChange = {};
 function changed(opts = {}) {
+  const modified = remember(opts.group);
+  if (modified) {
+    hoverSeq++; clearTimeout(hoverTimer);
+    if (S.errors.length) { S.errors = []; S.errorPolicy = ""; renderErrors(); markErrors(); }
+  }
+  if (opts.defer) {
+    pendingChange.chart ||= opts.chart;
+    clearTimeout(changeTimer);
+    changeTimer = setTimeout(() => { const next = pendingChange; pendingChange = {}; paintChange(next); }, 120);
+  } else paintChange(opts);
+  if (S.tab === "chart") refreshMap();
+}
+function paintChange(opts) {
   renderStatus();
   if (opts.all) render();
   else if (S.tab === "chart") {
     if (opts.chart) renderChart();
     if (opts.editor || (opts.list && !S.sel)) renderEditor();
   }
-  if (S.tab === "chart") refreshMap();
 }
 
 // ---------------------------------------------------------------- chart tab chrome
 function cmdbarHtml() {
-  return `<div class="cmdbar"><span class="prompt">›</span>
-    <input type="text" id="cmd" value="${esc(S.trialTask)}" placeholder="输入一个任务回车：看它落在哪、派给谁（不会真的派发）" spellcheck="false" autocomplete="off">
+  return composerHtml("cmd");
+}
+function composerHtml(id) {
+  return `<div class="card task-composer"><label for="${id}"><strong>输入任务，查看推荐</strong></label>
+    <p class="hint">使用当前草稿（含未保存修改）试运行。Enter 换行，⌘ / Ctrl + Enter 试运行；不会启动 Agent。</p>
+    <textarea id="${id}" rows="3" placeholder="例如：修复登录偶现的崩溃，附上复现步骤与约束…" spellcheck="false">${esc(S.trialTask)}</textarea>
+    <div class="row spread">
     <label class="check" title="用决策模型 Jev 判断；关掉则只用关键词规则"><input type="checkbox" data-act="toggle-backend" ${S.useBackend ? "checked" : ""}>Jev</label>
-    <button class="primary" data-act="run-trial" ${S.trialBusy ? "disabled" : ""}>${S.trialBusy ? "判断中…" : "试运行"}</button></div>`;
+    <button class="primary" data-act="run-trial" ${S.trialBusy ? "disabled" : ""}>${S.trialBusy ? "判断中…" : "试运行"}</button></div>
+    <details class="task-examples"><summary>选择示例任务</summary><div class="chips">${SAMPLE_TASKS.map((x) => `<button class="chip" data-sample="${esc(x)}">${esc(x)}</button>`).join("")}</div></details></div>`;
 }
 function toolbarHtml() {
   const opts = (sel) => dims("score").map((d) => `<option value="${esc(d.id)}" ${d.id === sel ? "selected" : ""}>${esc(d.label || d.id)}</option>`).join("");
   const choice = dims("choice").map((d) => `<label>${esc(d.label || d.id)} <select data-choice="${esc(d.id)}"><option value="">任意</option>${Object.keys(d.options).map((o) => `<option value="${esc(o)}" ${S.choice[d.id] === o ? "selected" : ""}>${esc(o)}</option>`).join("")}</select></label>`).join("");
   return `<div class="toolbar"><label>横轴 <select data-axis="x">${opts(S.axes.x)}</select></label><label>纵轴 <select data-axis="y">${opts(S.axes.y)}</select></label>${choice}
-    <label class="check"><input type="checkbox" data-act="toggle-log" ${S.showLog ? "checked" : ""}>历史 ${S.log.length}</label></div>`;
+    <span class="chart-layers row"><label class="check"><input type="checkbox" data-act="toggle-log" ${S.showLog ? "checked" : ""}>历史 ${S.log.length}</label>
+    <label class="check"><input type="checkbox" data-act="toggle-disabled" ${S.showDisabled ? "checked" : ""}>显示停用档位</label>
+    <label class="check"><input type="checkbox" data-act="toggle-labels" ${S.showLabels ? "checked" : ""}>显示标签</label></span></div>
+    <p class="hint" id="map-slice-description">${sliceDescription()} 图层开关和「图上隐藏」仅影响显示，路由启用状态由档位的「启用」决定。</p>`;
+}
+function sliceDescription() {
+  const choices = dims("choice").map((d) => `${esc(d.label || d.id)}：${esc(S.choice[d.id] || "任意（均匀先验）")}`).join("；");
+  const other = dims("score").filter((d) => ![S.axes.x, S.axes.y].includes(d.id)).map((d) => esc(d.label || d.id)).join("、");
+  return `地图是当前二维切片${choices ? `，${choices}` : ""}。${other ? `${other}未参与此切片。` : ""}实际任务会按完整概率分布评分。`;
 }
 function legendHtml() {
   return `<div class="legend"><span><span class="lg-sq"></span>底色 = 任务落在这里会派给谁</span><span><span class="lg-fill"></span>颜色 = 模型厂商，拖到任意位置</span><span><span class="lg-ring"></span>专才</span><span><span class="lg-ring dash"></span>未安装</span><span><span class="lg-line"></span>不挑这个轴</span><span><span class="lg-eff"></span>同一模型的思考档位 low → max</span></div>`;
@@ -377,7 +471,7 @@ function renderChart() {
   fitGeometry();
   const g = geom(), { xd, yd, nx, ny, gw, gh, cw, ch } = g;
   const X = (i) => G.L + i * cw, Y = (j) => G.T + (ny - j) * ch; // band edges
-  let s = `<svg class="chart" viewBox="0 0 ${G.W} ${G.H}" role="img" aria-label="档位领地图">`;
+  let s = `<svg class="chart" viewBox="0 0 ${G.W} ${G.H}" role="group" aria-label="档位领地图，点可用键盘选择，坐标可在编辑器修改">`;
   s += `<rect class="plane" x="${G.L}" y="${G.T}" width="${gw}" height="${gh}" fill="transparent"/>`;
   const img = mapImage(gw, gh);
   if (img) s += `<image href="${img}" x="${G.L}" y="${G.T}" width="${gw}" height="${gh}" preserveAspectRatio="none" pointer-events="none"/>`;
@@ -416,10 +510,12 @@ function renderChart() {
   }
 
   const sh = shares();
-  const visible = profiles().filter((p) => !S.hidden.has(p.id));
+  const visible = profiles().filter((p) => !S.hidden.has(p.id) && (S.showDisabled || p.enabled !== false));
   const pos = anchors(g, visible);
   const placed = visible.filter((p) => pos.has(p.id));
   const sp = selProfile(), trialWinner = S.trial && S.trial.profile_id;
+  const sameModel = (p) => !sp || shadeKey(p) === shadeKey(sp);
+  const emphasis = (p) => sameModel(p) ? 1 : 0.3;
 
   // selected profile: guides to both axes with its coordinates
   if (sp && pos.has(sp.id)) {
@@ -439,7 +535,7 @@ function renderChart() {
   for (const ln of lines) {
     const pts = ln.ps.map((p) => pos.get(p.id)).map((a) => `${a.dx},${a.dy}`).join(" ");
     const off = ln.ps.every((p) => p.enabled === false);
-    s += `<polyline class="effline" points="${pts}" stroke="${color(ln.ps[0].id)}" ${off ? 'stroke-dasharray="3 4"' : ""}/>`;
+    s += `<polyline class="effline" points="${pts}" stroke="${color(ln.ps[0].id)}" opacity="${emphasis(ln.ps[0])}" style="stroke-width:${sp && sameModel(ln.ps[0]) ? 3 : 1.5}px" ${off ? 'stroke-dasharray="3 4"' : ""}/>`;
     ln.ps.forEach((p, k) => lineOf.set(p.id, { ln, head: k === ln.ps.length - 1 }));
   }
   const chartLabel = (p) => {
@@ -449,7 +545,7 @@ function renderChart() {
   };
   const rankKey = (p) => (p.id === S.sel ? -2 : p.id === trialWinner ? -1 : lineOf.get(p.id)?.head ? -1 + 1e-3 : -(sh[p.id] || 0));
   const order = [...placed].sort((a, b) => rankKey(a) - rankKey(b));
-  const labels = placeLabels(g, order, pos, chartLabel, new Set([S.sel, trialWinner].filter(Boolean)));
+  const labels = S.showLabels ? placeLabels(g, order, pos, chartLabel, new Set([S.sel, trialWinner].filter(Boolean))) : new Map();
   for (const p of order) {
     if (!labels.has(p.id)) continue;
     const { box, leader } = labels.get(p.id), c = pos.get(p.id);
@@ -460,7 +556,7 @@ function renderChart() {
     const body = spec || !inst
       ? `<circle cx="${c.dx}" cy="${c.dy}" r="5.5" fill="var(--bg)" stroke="${col}" stroke-width="2" ${inst ? "" : 'stroke-dasharray="2 2"'}/>`
       : `<circle cx="${c.dx}" cy="${c.dy}" r="6" fill="${col}" stroke="var(--bg)" stroke-width="1.5"/>`;
-    s += `<g class="dotg" data-drag="move" data-id="${esc(p.id)}" opacity="${p.enabled === false ? 0.35 : 1}"><circle cx="${c.dx}" cy="${c.dy}" r="10" fill="transparent"/>${body}`;
+    s += `<g class="dotg" data-drag="move" data-id="${esc(p.id)}" data-chart-pick="${esc(p.id)}" role="button" tabindex="0" aria-label="编辑 ${esc(labelText(p))}" aria-pressed="${p.id === S.sel}" opacity="${(p.enabled === false ? 0.35 : 1) * emphasis(p)}"><circle cx="${c.dx}" cy="${c.dy}" r="10" fill="transparent"/>${body}`;
     if (p.id === S.sel) s += `<circle class="dot-ring" cx="${c.dx}" cy="${c.dy}" r="10"/>`;
     if (p.id === trialWinner) s += `<circle class="pulse" cx="${c.dx}" cy="${c.dy}" r="7"/>`;
     s += `<title>${esc(labelText(p))}${p.note ? "\n" + esc(p.note) : ""}\n${esc(p.kind)}${p.model ? " · " + esc(p.model) : ""}${p.effort ? " · " + esc(p.effort) : ""}${inst ? "" : "\n未安装"}</title></g>`;
@@ -470,7 +566,7 @@ function renderChart() {
     const { box, t } = labels.get(p.id);
     const strong = p.id === S.sel || p.id === trialWinner || (sh[p.id] || 0) > 0 || !mapReady();
     const small = lineOf.has(p.id) && !lineOf.get(p.id).head && p.id !== S.sel && p.id !== trialWinner;
-    s += `<text class="plabel ${small ? "eff" : ""}" x="${box.x0 + 2}" y="${box.y0 + 11.5}" fill="${strong ? "var(--ink)" : "var(--muted)"}" font-weight="${p.id === S.sel ? 700 : 500}" opacity="${p.enabled === false ? 0.5 : 1}">${esc(t)}</text>`;
+    s += `<text class="plabel ${small ? "eff" : ""}" x="${box.x0 + 2}" y="${box.y0 + 11.5}" fill="${strong ? "var(--ink)" : "var(--muted)"}" font-weight="${p.id === S.sel ? 700 : 500}" opacity="${(p.enabled === false ? 0.5 : 1) * emphasis(p)}">${esc(t)}</text>`;
   }
   // the agent switcher sits under the selected dot (not while dragging it)
   let bar = "";
@@ -484,7 +580,7 @@ function renderChart() {
   // profiles with no coordinate on either axis cannot be drawn on this plane
   const off = visible.filter((p) => !pos.has(p.id));
   const offBox = $("#offplane");
-  if (offBox) offBox.innerHTML = off.length ? `<span class="hint">不挑这两个轴：</span>${off.map((p) => `<span class="chip ${p.id === S.sel ? "on" : ""}" data-pick="${esc(p.id)}">${swatch(p)}${esc(labelText(p))}</span>`).join("")}` : "";
+  if (offBox) offBox.innerHTML = off.length ? `<span class="hint">不挑这两个轴：</span>${off.map((p) => `<button class="chip ${p.id === S.sel ? "on" : ""}" data-pick="${esc(p.id)}">${swatch(p)}${esc(labelText(p))}</button>`).join("")}` : "";
 }
 
 // ---------------------------------------------------------------- chart interaction
@@ -502,7 +598,7 @@ function valAt(e) {
 const snap = (v, hi) => clamp(Math.round(v / SNAP) * SNAP, 0, hi);
 function readout(v) {
   const info = $("#cellinfo"), hov = $("#hov"); if (!info || !hov) return;
-  if (!v) { hov.setAttribute("visibility", "hidden"); info.innerHTML = ""; return; }
+  if (!v) { hoverSeq++; clearTimeout(hoverTimer); hov.setAttribute("visibility", "hidden"); info.innerHTML = ""; return; }
   const g = geom(), cx = px(g, v.x), cy = py(g, v.y);
   $("#hov-x").setAttribute("x1", cx); $("#hov-x").setAttribute("x2", cx); $("#hov-x").setAttribute("y1", G.T); $("#hov-x").setAttribute("y2", G.T + g.gh);
   $("#hov-y").setAttribute("y1", cy); $("#hov-y").setAttribute("y2", cy); $("#hov-y").setAttribute("x1", G.L); $("#hov-y").setAttribute("x2", G.L + g.gw);
@@ -514,15 +610,17 @@ function readout(v) {
   // runner-up penalties come from the server, a beat later
   clearTimeout(hoverTimer);
   const seq = ++hoverSeq;
+  const key = sliceKey();
   hoverTimer = setTimeout(async () => {
     let res;
     try { res = await api("/api/map", { method: "POST", body: JSON.stringify({ policy: S.policy, x: S.axes.x, y: S.axes.y, choice: S.choice, at: [v.x, v.y] }) }); } catch { return; }
-    if (seq !== hoverSeq || res.status !== 200) return;
+    if (seq !== hoverSeq || key !== sliceKey() || res.status !== 200 || !info.isConnected) return;
     const [first, ...rest] = res.body.top;
-    info.innerHTML = `${where} → ${first ? `<b>${name(first.id)}</b> ${first.total}` : "无可用档位"}${rest.length ? ` <span class="dim">· 次选 ${rest.map((r) => `${name(r.id)} ${r.total}`).join(" · ")}</span>` : ""}`;
+    info.innerHTML = `${where} → ${first ? `<b>${name(first.id)}</b> 罚分 ${first.total}` : "无可用档位"}${rest.length ? ` <span class="dim">· 次选 ${rest.map((r) => `${name(r.id)} ${r.total}`).join(" · ")}</span>` : ""} <span class="hint">罚分越低越好</span>`;
   }, 140);
 }
 function onChartDown(e) {
+  if (e.button !== 0 || drag) return;
   const host = $("#chart"); if (!host || !host.contains(e.target) || e.target.closest(".dotbar")) return;
   const t = e.target.closest("[data-drag]");
   if (!t) {
@@ -537,6 +635,7 @@ function onChartDown(e) {
   const { xd, yd } = geom();
   if (S.sel !== p.id) { S.sel = p.id; renderEditor(); }
   drag = { p, start: valAt(e), x: getPoint(p, xd), y: getPoint(p, yd), moved: false };
+  H.group = null;
   host.setPointerCapture(e.pointerId);
   renderChart();
 }
@@ -556,7 +655,7 @@ function onChartMove(e) {
   if (nxv != null) setPoint(drag.p, xd, nxv);
   if (nyv != null) setPoint(drag.p, yd, nyv);
   drag.moved = true;
-  renderChart(); renderStatus();
+  changed({ chart: true, group: drag });
   const info = $("#cellinfo");
   if (info) info.innerHTML = `<b>${esc(drag.p.label || drag.p.id)}</b> → ${[nxv != null && `${esc(xd.label || xd.id)} ${fmt(nxv)}`, nyv != null && `${esc(yd.label || yd.id)} ${fmt(nyv)}`].filter(Boolean).join(" · ")}`;
   refreshMap(0); // throttled by fetchMap: one request in flight, the latest state follows
@@ -564,6 +663,7 @@ function onChartMove(e) {
 function onChartUp() {
   if (!drag) return;
   const moved = drag.moved; drag = null;
+  H.group = null;
   if (moved) changed({ editor: true });
   renderChart(); // the agent switcher is hidden while a dot is held
 }
@@ -571,9 +671,20 @@ function onChartUp() {
 // ---------------------------------------------------------------- inspector
 function renderEditor() {
   const host = $("#editor"); if (!host) return;
+  const focus = editorFocusKey(host);
   const p = selProfile();
   host.innerHTML = p ? editorHtml(p) : listHtml();
   markErrors();
+  if (focus) host.querySelector(focus)?.focus();
+}
+function editorFocusKey(host) {
+  const el = document.activeElement; if (!host.contains(el)) return null;
+  if (el.id) return `#${CSS.escape(el.id)}`;
+  for (const key of ["enable", "harness", "effort", "f", "ptoff"]) {
+    if (el.dataset[key] !== undefined) return `[data-${key}="${CSS.escape(el.dataset[key])}"]`;
+  }
+  if (el.dataset.aff !== undefined) return `[data-aff="${CSS.escape(el.dataset.aff)}"][data-opt="${CSS.escape(el.dataset.opt)}"][data-val="${CSS.escape(el.dataset.val)}"]`;
+  return null;
 }
 function newDefaults() {
   if (S.source !== "user" || !S.defaults) return [];
@@ -592,22 +703,41 @@ function mergeDefaults() {
   changed({ all: true });
 }
 function listHtml() {
-  const sh = shares(), ready = mapReady();
   const fresh = newDefaults();
-  const vendors = [...new Set(profiles().map(vendorOf))];
+  return `<div class="insp-head"><h3>档位 <span class="muted mono">${profiles().length}</span></h3><button data-act="new-profile">＋ 新建</button></div>
+    ${fresh.length ? `<div class="banner"><div>内置默认值里有 ${fresh.length} 个新档位：<span class="mono">${esc(fresh.slice(0, 6).map((p) => p.label || p.id).join("、"))}${fresh.length > 6 ? " …" : ""}</span></div><button data-act="merge-defaults">加入</button></div>` : ""}
+    <div class="profile-tools"><div class="profile-search"><label for="profile-search">搜索档位</label><input id="profile-search" type="search" value="${esc(S.search)}" placeholder="名称、模型、Agent 或备注" style="width:100%"></div>
+      <div class="profile-filter"><label for="profile-filter">状态筛选</label> <select id="profile-filter">${[["all", "全部"], ["enabled", "已启用"], ["disabled", "已停用"], ["missing", "未安装 CLI"], ["zero", "当前切片零覆盖"]].map(([v, l]) => `<option value="${v}" ${S.filter === v ? "selected" : ""}>${l}</option>`).join("")}</select></div></div>
+    <p class="hint">覆盖率来自服务器在当前切片的采样。零覆盖不等于无用：其他任务类型、其他维度或显式指定档位时仍可能适用。停用和未安装是独立状态。</p>
+    <div id="profile-results">${profileRowsHtml()}</div>`;
+}
+function updateList() {
+  const box = $("#profile-results");
+  if (box) { const focus = editorFocusKey(box); box.innerHTML = profileRowsHtml(); if (focus) box.querySelector(focus)?.focus(); }
+}
+function profileRowsHtml() {
+  const sh = shares(), ready = mapReady();
+  const query = S.search.trim().toLocaleLowerCase();
+  const matches = profiles().filter((p) => {
+    if (query && ![p.id, p.label, p.model, p.kind, p.effort, p.note, modelEntry(p)?.label, vendorName(vendorOf(p))].filter(Boolean).join(" ").toLocaleLowerCase().includes(query)) return false;
+    if (S.filter === "enabled") return p.enabled !== false;
+    if (S.filter === "disabled") return p.enabled === false;
+    if (S.filter === "missing") return !isInstalled(p);
+    if (S.filter === "zero") return ready && p.enabled !== false && isInstalled(p) && !sh[p.id];
+    return true;
+  });
+  const vendors = [...new Set(matches.map(vendorOf))];
   const row = (p) => {
     const spec = specialty(p), n = sh[p.id] || 0;
-    const meta = [p.kind, p.model ? p.model.split("/").pop() : "默认模型", p.effort, spec && `仅 ${spec}`, `$${p.cost ?? 0}`, p.time != null && `${p.time}min`].filter(Boolean).join(" · ");
-    return `<div class="prow ${p.id === S.sel ? "sel" : ""} ${p.enabled === false || S.hidden.has(p.id) ? "off" : ""}" data-pick="${esc(p.id)}">
-      ${swatch(p)}<span class="name">${esc(p.label || p.id)}</span>
-      <span class="wins ${n ? "" : "zero"}" title="在当前领地图上占的面积">${ready ? `${Math.round(n * 100)}%` : ""}</span>
-      <input type="checkbox" data-enable="${esc(p.id)}" ${p.enabled !== false ? "checked" : ""} title="启用">
+    const status = [p.enabled === false ? "已停用" : "已启用", !isInstalled(p) && "CLI 未安装", S.hidden.has(p.id) && "仅图上隐藏", ready && p.enabled !== false && isInstalled(p) && !n && "当前切片零覆盖"].filter(Boolean).join(" · ");
+    const meta = [status, p.kind, p.model ? p.model.split("/").pop() : "默认模型", p.effort, spec && `专才 ${spec}`, `$${p.cost ?? 0}`, p.time != null && `${p.time} 分钟`].filter(Boolean).join(" · ");
+    return `<div class="prow ${p.id === S.sel ? "sel" : ""} ${p.enabled === false ? "off" : ""}">
+      ${swatch(p)}<button class="name ghost" data-pick="${esc(p.id)}" title="${esc(meta)}" style="text-align:left;white-space:normal">${esc(p.label || p.id)}</button>
+      <span class="wins ${n ? "" : "zero"}" title="当前切片采样覆盖率">${ready ? n ? `${(n * 100).toFixed(1)}%` : "0%" : "待更新"}</span>
+      <input type="checkbox" data-enable="${esc(p.id)}" data-path="profiles[${profIndex(p.id)}].enabled" ${p.enabled !== false ? "checked" : ""} aria-label="启用 ${esc(p.label || p.id)}">
       <span class="meta">${esc(meta)}</span></div>`;
   };
-  return `<div class="insp-head"><h3>档位 <span class="muted mono">${profiles().length}</span></h3><button data-act="new-profile">＋ 新建</button></div>
-    ${fresh.length ? `<div class="banner"><div>内置默认值里有 ${fresh.length} 个档位不在你保存的配置里：<span class="mono">${esc(fresh.slice(0, 6).map((p) => p.label || p.id).join("、"))}${fresh.length > 6 ? " …" : ""}</span></div><button data-act="merge-defaults">加入</button></div>` : ""}
-    <p class="hint">点图上的点或下面的行来编辑。百分比是它在当前领地图上占的面积，0% 说明被别的档位完全盖住。</p>
-    ${vendors.map((v) => `<div class="group"><div class="group-h"><span class="swatch" style="background:${vendorColor(v)}"></span>${esc(vendorName(v))}</div>${profiles().filter((p) => vendorOf(p) === v).map(row).join("")}</div>`).join("")}`;
+  return `<p class="hint" role="status">显示 ${matches.length} / ${profiles().length} 个档位${ready ? "" : " · 切片采样待更新"}</p>${matches.length ? vendors.map((v) => `<div class="group"><div class="group-h"><span class="swatch" style="background:${vendorColor(v)}"></span>${esc(vendorName(v))}</div>${matches.filter((p) => vendorOf(p) === v).map(row).join("")}</div>`).join("") : `<p class="profile-empty hint">${S.filter === "zero" && !ready ? "当前切片尚未就绪，暂不能判断零覆盖。" : "没有符合条件的档位。可修改搜索词或状态筛选。"}</p>`}`;
 }
 function editorHtml(p) {
   const i = profIndex(p.id), P = `profiles[${i}]`;
@@ -617,48 +747,50 @@ function editorHtml(p) {
   const catalog = S.models[p.kind] || [];
   const entry = catalog.find((m) => m.id === p.model);
   const noModel = !MODEL_KINDS.includes(p.kind), noEffort = !EFFORT_KINDS.includes(p.kind);
-  const effList = entry && entry.efforts.length ? entry.efforts : EFFORTS;
+  const effList = entry && entry.efforts?.length ? entry.efforts : EFFORTS;
   const effSeg = ["", ...effList, ...(p.effort && !effList.includes(p.effort) ? [p.effort] : [])].map((e) =>
-    `<button data-effort="${e}" class="${(p.effort || "") === e ? "on" : ""} ${e && !effList.includes(e) ? "warn" : ""}" ${e && !effList.includes(e) ? 'title="当前模型不支持这个等级"' : ""}>${e || "默认"}</button>`).join("");
+    `<button data-effort="${e}" aria-pressed="${(p.effort || "") === e}" class="${(p.effort || "") === e ? "on" : ""} ${e && !effList.includes(e) ? "warn" : ""}" ${e && !effList.includes(e) ? 'title="当前模型不支持这个等级"' : ""}>${e || "默认"}</button>`).join("");
   const me = modelEntry(p);
   const modelHint = noModel ? "router 还不会给这个 agent 传模型参数，这一项不生效"
     : me ? `${esc(me.label)} · ${esc(vendorName(me.vendor))}` : entry ? esc(entry.label) : p.model && catalog.length ? "不在已知列表里，会原样传给 CLI" : catalog.length ? `可选 ${catalog.length} 个，点输入框选择` : "";
   const effortHint = noEffort ? (p.kind === "opencode" ? "OpenCode 交互模式没有 effort 参数，用模型默认档" : "这个 agent 不支持 effort 参数") : "";
   const coords = dims("score").map((d) => {
     const v = getPoint(p, d), n = nLevels(d), on = v != null;
-    return `<span class="lbl">${esc(d.label || d.id)}</span><div class="pt" data-path="${P}.point.${esc(d.id)}">
-        <input type="range" min="0" max="${n - 1}" step="${SNAP}" value="${on ? v : (n - 1) / 2}" data-pt="${esc(d.id)}" ${on ? "" : "disabled"}>
-        <span class="mono pt-v">${on ? fmt(v) : "—"}</span>
+    return `<label class="lbl" for="pt-${esc(d.id)}">${esc(d.label || d.id)}</label><div class="pt" data-path="${P}.point.${esc(d.id)}">
+        <input type="range" min="0" max="${n - 1}" step="0.01" value="${on ? v : (n - 1) / 2}" data-pt="${esc(d.id)}" aria-label="${esc(d.label || d.id)}坐标滑块" data-path="${P}.point.${esc(d.id)}" ${on ? "" : "disabled"}>
+        <input id="pt-${esc(d.id)}" class="mono pt-v" type="number" min="0" max="${n - 1}" step="0.01" value="${on ? v : ""}" data-pt="${esc(d.id)}" data-path="${P}.point.${esc(d.id)}" style="width:5em" ${on ? "" : "disabled"}>
         <label class="check"><input type="checkbox" data-ptoff="${esc(d.id)}" ${on ? "" : "checked"}>不挑</label></div>
       <span class="desc">${on ? esc(shortLevel(d.levels[Math.round(v)])) : "这个维度上不罚分"}</span>`;
   }).join("");
   const affinity = dims("choice").map((d) => {
     const aff = (p.affinity && p.affinity[d.id]) || {};
     const def = aff["*"] ?? 1;
-    const seg = (opt, cur, inherit) => `<span class="seg">${inherit ? `<button data-aff="${esc(d.id)}" data-opt="${esc(opt)}" data-val="inherit" class="${cur === undefined ? "on" : ""}">默认</button>` : ""}${AFF_STEPS.map(([v, t]) => `<button data-aff="${esc(d.id)}" data-opt="${esc(opt)}" data-val="${v}" class="${cur !== undefined && Number(cur) === Number(v) ? "on" : ""}">${t}</button>`).join("")}</span>`;
+    const seg = (opt, cur, inherit) => `<span class="seg" data-path="${P}.affinity.${esc(d.id)}.${esc(opt)}" role="group" aria-label="${esc(d.label || d.id)} · ${esc(opt === "*" ? "默认适配" : opt)}">${inherit ? `<button data-aff="${esc(d.id)}" data-opt="${esc(opt)}" data-val="inherit" aria-pressed="${cur === undefined}" class="${cur === undefined ? "on" : ""}">默认</button>` : ""}${AFF_STEPS.map(([v, t]) => `<button data-aff="${esc(d.id)}" data-opt="${esc(opt)}" data-val="${v}" aria-pressed="${cur !== undefined && Number(cur) === Number(v)}" class="${cur !== undefined && Number(cur) === Number(v) ? "on" : ""}">${t}</button>`).join("")}</span>`;
     return `<div class="stack" data-path="${P}.affinity.${esc(d.id)}"><div class="row spread"><span class="sect" style="margin:0">${esc(d.label || d.id)}</span><span class="hint">没单独设置的选项按 *</span></div>
       <div class="aff"><span>*</span>${seg("*", def, false)}${Object.keys(d.options).map((o) => `<span title="${esc(d.options[o])}">${esc(o)}</span>${seg(o, aff[o], true)}`).join("")}</div></div>`;
   }).join("");
   return `<button class="ghost back" data-act="back">← 全部档位</button>
     <div class="ed-title">${swatch(p)}<h3>${esc(p.label || p.id)}</h3><span class="mono">${esc(p.id)}</span></div>
     ${p.note ? `<p class="hint note">${esc(p.note)}</p>` : ""}
-    <div class="grid2">
+    <section class="editor-section"><h3>基本信息</h3><div class="editor-section-body grid2">
       ${me ? `<label>运行于</label><div>${harnessSeg(p)}<div class="hint">同一个模型换个 agent 来跑；模型 ID 会按目录自动换。</div></div>` : ""}
-      <label>Agent</label><select data-f="kind" data-path="${P}.kind">${kindOpts}</select>
-      <label>模型</label><div><input data-f="model" data-path="${P}.model" value="${esc(p.model || "")}" placeholder="（agent 默认）" list="dl-models" spellcheck="false" autocomplete="off" style="width:100%" class="mono">
+      <label for="profile-kind">Agent</label><select id="profile-kind" data-f="kind" data-path="${P}.kind">${kindOpts}</select>
+      <label for="profile-model">模型</label><div><input id="profile-model" data-f="model" data-path="${P}.model" value="${esc(p.model || "")}" placeholder="（agent 默认）" list="dl-models" spellcheck="false" autocomplete="off" style="width:100%" class="mono">
         <datalist id="dl-models">${catalog.map((m) => `<option value="${esc(m.id)}">${esc(m.label)}</option>`).join("")}</datalist>
         ${modelHint ? `<div class="hint">${modelHint}</div>` : ""}</div>
-      <label>Effort</label><div><span class="seg" data-path="${P}.effort">${effSeg}</span>${effortHint ? `<div class="hint">${effortHint}</div>` : ""}</div>
-      <label>名称</label><input data-f="label" data-path="${P}.label" value="${esc(p.label || "")}">
-      <label>ID</label><input data-f="id" data-path="${P}.id" value="${esc(p.id)}" spellcheck="false" class="mono">
-      <label>成本</label><span class="row"><input type="number" step="0.01" min="0" data-f="cost" data-path="${P}.cost" value="${p.cost ?? 0}"><span class="hint">每任务美元 × ${S.policy.scoring?.cost_weight ?? 0.05}${(S.policy.scoring?.agent_cost || {})[p.kind] != null ? ` × ${esc(p.kind)} 系数 ${S.policy.scoring.agent_cost[p.kind]}` : ""}</span></span>
-      <label>耗时</label><span class="row"><input type="number" step="0.1" min="0" data-f="time" data-path="${P}.time" value="${p.time ?? 0}"><span class="hint">每任务分钟 × ${S.policy.scoring?.time_weight ?? 0}</span></span>
-      <label>状态</label><span class="row"><label class="check"><input type="checkbox" data-f="enabled" ${p.enabled !== false ? "checked" : ""}>启用</label><label class="check"><input type="checkbox" data-act="hide" ${S.hidden.has(p.id) ? "checked" : ""}>图上隐藏</label></span>
-    </div>
-    <hr class="sep"><p class="sect">坐标</p><div class="rng">${coords}</div>
-    <p class="hint">任务离坐标半格以内不罚分；再远，比坐标高（能力不够）每级罚 ${S.policy.scoring?.under_penalty ?? 3}，比坐标低（大材小用）每级罚 ${S.policy.scoring?.over_penalty ?? 1}。也可以直接在图上拖点。</p>
-    ${affinity ? `<hr class="sep"><p class="sect">类型亲和度</p>${affinity}` : ""}
-    <hr class="sep"><p class="sect">Prompt 前缀</p><textarea rows="3" data-f="prompt_prefix" data-path="${P}.prompt_prefix" placeholder="派发时加在任务前面，可留空">${esc(p.prompt_prefix || "")}</textarea>
+      <label>思考强度</label><div><span class="seg" role="group" aria-label="思考强度" data-path="${P}.effort">${effSeg}</span>${effortHint ? `<div class="hint">${effortHint}</div>` : ""}</div>
+      <label for="profile-label">名称</label><input id="profile-label" data-f="label" data-path="${P}.label" value="${esc(p.label || "")}">
+      <label for="profile-id">档位 ID</label><input id="profile-id" data-f="id" data-path="${P}.id" value="${esc(p.id)}" spellcheck="false" class="mono">
+      <label>状态</label><span class="row"><label class="check"><input type="checkbox" data-f="enabled" data-path="${P}.enabled" ${p.enabled !== false ? "checked" : ""}>启用路由</label><label class="check"><input type="checkbox" data-act="hide" ${S.hidden.has(p.id) ? "checked" : ""}>仅图上隐藏</label></span>
+    </div><p class="hint">图上隐藏不改变路由。${isInstalled(p) ? "" : "此 Agent 的 CLI 未安装，自动路由不可用。"}</p></section>
+    <section class="editor-section"><h3>坐标</h3><div class="editor-section-body rng">${coords}</div>
+    <p class="hint">滑块、数字输入和图上拖点会同步修改坐标。勾选「不挑」时，此维度不产生罚分。匹配罚分由服务器按当前权重和容差计算。</p></section>
+    <section class="editor-section"><h3>任务适配</h3><div class="editor-section-body">${affinity || `<p class="hint">当前配置没有分类维度。</p>`}</div></section>
+    <details class="editor-section"><summary>高级参数</summary><div class="editor-section-body stack"><div class="grid2">
+      <label for="profile-cost">成本</label><span class="row"><input id="profile-cost" type="number" step="0.01" min="0" data-f="cost" data-path="${P}.cost" value="${p.cost ?? 0}"><span class="hint">每任务美元；由成本权重及 Agent 系数计入罚分</span></span>
+      <label for="profile-time">耗时</label><span class="row"><input id="profile-time" type="number" step="0.1" min="0" data-f="time" data-path="${P}.time" value="${p.time ?? 0}"><span class="hint">每任务分钟；由耗时权重计入罚分</span></span></div>
+      <div><label for="profile-prefix">任务前缀</label><textarea id="profile-prefix" rows="3" data-f="prompt_prefix" data-path="${P}.prompt_prefix" placeholder="派发时加在任务前面，可留空">${esc(p.prompt_prefix || "")}</textarea></div>
+      <div><label for="profile-note">备注</label><textarea id="profile-note" rows="2" data-f="note" data-path="${P}.note">${esc(p.note || "")}</textarea></div></div></details>
     <hr class="sep"><div class="row"><button data-act="dup-profile">复制档位</button><button class="danger" data-act="del-profile">删除档位</button></div>`;
 }
 
@@ -666,7 +798,7 @@ function setProfileField(p, f, el) {
   if (f === "enabled") p.enabled = el.checked;
   else if (f === "cost") p.cost = el.value === "" ? 0 : Number(el.value);
   else if (f === "time") { if (el.value === "") delete p.time; else p.time = Number(el.value); }
-  else if (["model", "prompt_prefix"].includes(f)) { const v = f === "model" ? el.value.trim() : el.value; if (v === "") delete p[f]; else p[f] = v; }
+  else if (["model", "prompt_prefix", "note"].includes(f)) { const v = f === "model" ? el.value.trim() : el.value; if (v === "") delete p[f]; else p[f] = v; }
   else if (f !== "id") p[f] = el.value;
 }
 function renameProfile(p, newId) {
@@ -682,21 +814,67 @@ function renameProfile(p, newId) {
 }
 
 // ---------------------------------------------------------------- trial summary (chart tab)
+const trialPolicy = () => S.trialContext ? JSON.parse(S.trialContext.policy) : S.policy;
+const trialDims = () => trialPolicy().dimensions || [];
+const penaltyLabel = (id) => (trialDims().find((d) => d.id === id) || {}).label || ({ cost: "成本", time: "耗时" }[id] || id);
+const penaltyText = (v) => String(Math.round(Number(v) * 10000) / 10000);
+function trialStale() {
+  return !!S.trial && !!S.trialContext && (S.trialContext.policy !== JSON.stringify(S.policy) || S.trialContext.task !== S.trialTask.trim() || S.trialContext.useBackend !== S.useBackend);
+}
+function staleText() {
+  const policyChanged = S.trialContext?.policy !== JSON.stringify(S.policy);
+  return `此结果已过期：${policyChanged ? "草稿配置已改变" : "任务或判断方式已改变"}。以下保留上次请求的结果，请重新试运行。`;
+}
+function trialReason(t) {
+  const ranked = (t.ranking || []).filter((r) => r.available), win = (t.ranking || []).find((r) => r.profile_id === t.profile_id);
+  if (!win) return "没有可用推荐；查看诊断中的错误信息。";
+  const parts = Object.entries(win.breakdown || {}).filter(([, v]) => Number(v) !== 0).map(([k, v]) => `${penaltyLabel(k)} ${penaltyText(v)}`).join("、") || "所有计分项均为 0";
+  if (t.reason === "explicitly pinned") return `任务显式指定了此档位，未按最低罚分选择。其总罚分为 ${penaltyText(win.total)}（${parts}）。`;
+  const runner = ranked.find((r) => r.profile_id !== t.profile_id);
+  let reason = `在可用档位中总罚分最低：${penaltyText(win.total)}。罚分构成：${parts}。`;
+  if (runner) {
+    const gap = Number(runner.total) - Number(win.total);
+    if (gap === 0) reason += `与 ${runner.label} 总罚分相同，由服务器按成本和配置顺序打破平局。`;
+    else if (gap > 0) {
+      const keys = new Set([...Object.keys(runner.breakdown || {}), ...Object.keys(win.breakdown || {})]);
+      const differences = [...keys].map((k) => [k, Number(runner.breakdown?.[k] || 0) - Number(win.breakdown?.[k] || 0)]).filter(([, v]) => v > 0).sort((a, b) => b[1] - a[1]).slice(0, 2);
+      reason += `比次选 ${runner.label} 少罚 ${penaltyText(gap)}${differences.length ? `；主要优势为${differences.map(([k, v]) => `${penaltyLabel(k)}少罚 ${penaltyText(v)}`).join("、")}` : ""}。`;
+    }
+  } else reason += "本次只有一个可用档位。";
+  return reason;
+}
+function startupCommand(t = S.trial) {
+  if (!t?.kind) return "";
+  const bin = (trialPolicy().binaries || {})[t.kind] || t.kind;
+  const quote = (arg) => /^[a-zA-Z0-9_./:=,@+\-]+$/.test(String(arg)) ? String(arg) : "'" + String(arg).replace(/'/g, "'\\''") + "'";
+  return [bin, ...(t.args || [])].map(quote).join(" ");
+}
+async function copyCommand() {
+  const command = startupCommand(); if (!command) return;
+  try { await navigator.clipboard.writeText(command); toast("启动命令已复制"); }
+  catch { const el = $("[data-command]"); if (el) { el.focus(); el.select(); } toast("无法自动复制，已选中命令，可按 ⌘ / Ctrl + C"); }
+}
 function trialBoxHtml() {
   const t = S.trial; if (!t) return "";
   const a = t.assessment || {};
   const top = (t.ranking || []).filter((r) => r.available).slice(0, 5);
   const max = Math.max(0.01, ...top.map((r) => r.total));
-  const bin = (S.policy.binaries || {})[t.kind] || t.kind;
-  const choices = Object.entries(a.choices || {}).filter(([, v]) => v).map(([k, v]) => `${(dimById(k) || {}).label || k}=${v}`).join(" ");
-  return `<div class="card trialbox"><div class="row spread"><span class="trial-task">${esc(S.trialTask)}</span>
-      <span class="row"><span class="pill">${esc(a.source || "")}${a.confidence != null ? ` · ${a.confidence}` : ""}${a.bumped ? " · 难度上调" : ""}</span>${choices ? `<span class="pill">${esc(choices)}</span>` : ""}<button class="ghost" data-act="clear-trial">清除</button></span></div>
-    ${t.profile_id ? `<div class="winner">${swatch(profById(t.profile_id) || { id: t.profile_id })}${esc(t.profile_label || t.profile_id)}<span class="mono muted" style="font-size:11px;font-weight:400">${esc(t.profile_id)}</span></div>
-      <div class="cmdline">${esc([bin, ...(t.args || [])].join(" "))}</div>` : `<p class="danger">${esc(t.error || "没有可用档位")}</p>`}
+  const choices = Object.entries(a.choices || {}).filter(([, v]) => v).map(([k, v]) => `${penaltyLabel(k)}=${v}`).join(" · ");
+  const source = ({ systemone: "决策模型", heuristic: "关键词规则" })[a.source] || a.source || "未知来源";
+  const modelLabel = Object.values(trialPolicy().models || {}).find((m) => m.via?.[t.kind] === t.model)?.label || t.model || "Agent 默认模型";
+  return `<div class="card trialbox result-summary"><div class="row spread"><span class="trial-task">${esc(S.trialContext?.task || S.trialTask)}</span><button class="ghost" data-act="clear-trial">清除结果</button></div>
+    <p class="stale-result" data-stale role="status" ${trialStale() ? "" : "hidden"}>${esc(staleText())}</p>
+    <p class="sect" data-trial-validity>${trialStale() ? "上次试运行结果" : "推荐档位"}</p>
+    ${t.profile_id ? `<div class="winner">${swatch(profById(t.profile_id) || { id: t.profile_id })}<strong>${esc(modelLabel)}</strong></div>
+      <div class="result-meta row"><span class="pill">Agent：${esc(t.kind)}</span><span class="pill">思考强度：${esc(t.effort || "默认")}</span><span>${esc(t.profile_label || t.profile_id)} · ${esc(t.profile_id)}</span></div>
+      <p class="result-reason">${esc(trialReason(t))}</p>` : `<p class="danger">${esc(t.error || "没有可用档位")}</p>`}
+    <p class="hint result-meta">${esc(source)}${a.confidence != null ? ` · 置信度 ${esc(a.confidence)}` : ""}${a.bumped ? " · 低置信度使难度上调" : ""}${choices ? ` · ${esc(choices)}` : ""}</p>
     ${a.details && a.details.systemone_error ? `<p class="hint">决策模型不可用，已用关键词规则：${esc(a.details.systemone_error)}</p>` : ""}
     <div class="rk">${top.map((r) => { const win = r.profile_id === t.profile_id ? "win" : ""; const p = profById(r.profile_id);
       return `<span class="n ${win}">${p ? swatch(p) : ""}${esc(r.label)}</span><span class="track"><span class="fill ${win}" style="width:${Math.max(2, (r.total / max) * 100).toFixed(1)}%"></span></span><span class="v ${win}">${r.total}</span>`; }).join("")}</div>
-    <div class="row spread" style="margin-top:8px"><span class="hint">罚分，越低越好</span><button class="ghost" data-tab-go="trial">各维度概率与完整排名 →</button></div></div>`;
+    <p class="hint">罚分越低越好；条形越短，罚分越少。结果来自本次请求的草稿快照。</p>
+    ${t.profile_id ? `<details class="result-details"><summary>启动命令</summary><label class="hint" for="startup-command">可手动启动的 CLI 命令</label><textarea id="startup-command" class="cmdline" rows="2" readonly data-command>${esc(startupCommand(t))}</textarea><button data-act="copy-command">复制启动命令</button>${t.kind === "droid" && (t.args || []).includes("--settings") ? `<p class="hint">Droid 设置文件由实际派发步骤生成，直接启动前需确保该文件存在。</p>` : ""}</details>` : ""}
+    <details class="result-details"><summary>展开诊断：概率、完整排名与罚分明细</summary>${trialDiagnosticsHtml()}</details></div>`;
 }
 
 // ---------------------------------------------------------------- dimensions tab
@@ -733,6 +911,7 @@ function renameDim(d, newId) {
   for (const v of Object.values(S.policy.aliases || {})) if (v && typeof v === "object" && old in v) { v[newId] = v[old]; delete v[old]; }
   if (S.axes.x === old) S.axes.x = newId;
   if (S.axes.y === old) S.axes.y = newId;
+  if (old in S.choice) { S.choice[newId] = S.choice[old]; delete S.choice[old]; }
 }
 function dropDimRefs(id) {
   for (const p of profiles()) {
@@ -776,12 +955,12 @@ function applyOptions(d, text) {
 }
 
 // ---------------------------------------------------------------- trial tab
-function trialHtml() {
+function trialDiagnosticsHtml() {
   const t = S.trial;
   let result = "";
   if (t) {
     const a = t.assessment || {};
-    const dimBlocks = dims().map((d) => {
+    const dimBlocks = trialDims().map((d) => {
       const dist = (a.dists || {})[d.id];
       if (!dist) return `<div><b>${esc(d.label || d.id)}</b> <span class="muted">— 无数据</span></div>`;
       const rows = d.type === "score" ? d.levels.map((lv, k) => [`${k} · ${shortLevel(lv)}`, dist[k] || 0, lv]) : Object.keys(d.options).map((o) => [o, dist[o] || 0, d.options[o]]);
@@ -790,34 +969,57 @@ function trialHtml() {
     }).join("");
     const rank = (t.ranking || []).map((r, k) => `<tr class="${r.profile_id === t.profile_id ? "win" : ""} ${r.available ? "" : "na"}"><td>${k + 1}</td>
       <td><span class="swatch" style="background:${color(r.profile_id)}"></span> ${esc(r.label)}<div class="bk">${esc(r.profile_id)} · ${esc(r.kind)}</div></td>
-      <td><b>${r.total}</b></td><td class="bk">${Object.entries(r.breakdown).filter(([, v]) => v).map(([k2, v]) => `${esc((dimById(k2) || {}).label || ({ cost: "成本", time: "耗时" }[k2] || k2))} ${v}`).join(" · ") || "0"}${r.available ? "" : `<br>✗ ${esc(r.why_unavailable)}`}</td></tr>`).join("");
+      <td><b>${esc(r.total)}</b></td><td class="bk">${penaltyStackHtml(r)}${r.available ? "" : `<br>不可用：${esc(r.why_unavailable === "disabled" ? "已停用" : (r.why_unavailable || "CLI 未安装"))}`}</td></tr>`).join("");
     const err = a.details && a.details.systemone_error ? `<p class="hint">决策模型不可用，已用关键词规则：${esc(a.details.systemone_error)}</p>` : "";
-    result = `<div class="split even" style="margin-top:12px"><div class="card stack"><h3>维度判断 <span class="muted">${esc(a.source)} · 置信度 ${a.confidence}${a.bumped ? " · 低置信度→难度上调" : ""}</span></h3>${err}${dimBlocks}</div>
+    result = `<div class="split even" style="margin-top:12px"><div class="card stack"><h3>维度判断 <span class="muted">${esc(a.source)} · 置信度 ${esc(a.confidence)}${a.bumped ? " · 低置信度→难度上调" : ""}</span></h3>${err}${dimBlocks}</div>
       <div class="card"><h3>档位排名 ${t.profile_id ? `→ ${esc(t.profile_label || t.profile_id)}` : ""}</h3>${t.error ? `<p class="danger">${esc(t.error)}</p>` : ""}
       ${t.args ? `<p class="hint">启动参数：--kind ${esc(t.kind)}${t.args.length ? " -- " + esc(t.args.join(" ")) : ""}</p>` : ""}
-      <div class="table-scroll"><table><thead><tr><th>#</th><th>档位</th><th>罚分</th><th>明细</th></tr></thead><tbody>${rank}</tbody></table></div></div></div>`;
+      <p class="hint">罚分越低越好。明细直接使用服务器返回值；不可用档位不参与自动选择。</p><div class="table-scroll"><table><thead><tr><th>#</th><th>档位</th><th>罚分</th><th>明细</th></tr></thead><tbody>${rank}</tbody></table></div></div></div>`;
   }
-  return `<div class="card"><h3>试运行</h3><p class="hint">用编辑器里当前的配置（包括未保存的修改）判断一个任务，看各维度的概率和所有档位的排名。不会派发 agent。</p>
-    <textarea id="trial-task" rows="3" placeholder="输入一个任务描述，例如：修复登录偶现的崩溃">${esc(S.trialTask)}</textarea>
-    <div class="row"><button class="primary" data-act="run-trial" ${S.trialBusy ? "disabled" : ""}>${S.trialBusy ? "判断中…" : "试运行"}</button>
-      <label><input type="checkbox" data-act="toggle-backend" ${S.useBackend ? "checked" : ""}> 使用决策模型（Jev）</label></div>
-    <div class="chips">${SAMPLE_TASKS.map((x) => `<span class="chip" data-sample="${esc(x)}">${esc(x)}</span>`).join("")}</div></div>${result}`;
+  return result;
+}
+function penaltyStackHtml(r) {
+  const parts = Object.entries(r.breakdown || {}), total = Math.max(0.0001, Number(r.total));
+  const segments = parts.filter(([, v]) => Number(v) > 0).map(([k, v]) => `<span class="penalty-segment" style="width:${(Number(v) / total * 100).toFixed(2)}%" title="${esc(penaltyLabel(k))} ${esc(penaltyText(v))}"></span>`).join("");
+  return `${segments ? `<div class="penalty-stack" aria-hidden="true">${segments}</div>` : ""}<div>${parts.map(([k, v]) => `${esc(penaltyLabel(k))} ${esc(penaltyText(v))}`).join(" · ") || "0"}</div>`;
+}
+function trialHtml() {
+  return `${composerHtml("trial-task")}<div id="trialbox">${trialBoxHtml()}</div>`;
+}
+function renderTrialState() {
+  const box = $("#trialbox"); if (box) box.innerHTML = trialBoxHtml();
+  document.querySelectorAll('[data-act="run-trial"]').forEach((b) => { b.disabled = S.trialBusy; b.textContent = S.trialBusy ? "判断中…" : "试运行"; });
+  document.querySelectorAll("[data-choice]").forEach((el) => { el.value = S.choice[el.dataset.choice] || ""; });
+  const description = $("#map-slice-description");
+  if (description) description.innerHTML = `${sliceDescription()} 图层开关和「图上隐藏」仅影响显示，路由启用状态由档位的「启用」决定。`;
+  renderStatus(); renderErrors(); markErrors();
+  if (S.tab === "chart") { renderChart(); refreshMap(0); }
 }
 async function runTrial() {
-  const task = ($("#cmd") || $("#trial-task") || {}).value?.trim() || S.trialTask;
+  if (S.trialBusy) return;
+  const task = (($("#cmd") || $("#trial-task"))?.value ?? S.trialTask).trim();
   if (!task) { toast("先输入任务"); return; }
-  S.trialTask = task; S.trialBusy = true; render();
+  const context = { task, policy: JSON.stringify(S.policy), useBackend: S.useBackend };
+  const choiceAtStart = JSON.stringify(S.choice);
+  S.trialTask = task; S.trialBusy = true; renderTrialState();
   try {
-    const { status, body } = await api("/api/route", { method: "POST", body: JSON.stringify({ task, policy: S.policy, use_backend: S.useBackend }) });
-    if (status === 422) { S.errors = body.errors || []; toast("配置有错误，先修正再试运行"); }
+    const { status, body } = await api("/api/route", { method: "POST", body: JSON.stringify({ task, policy: JSON.parse(context.policy), use_backend: context.useBackend }) });
+    if (status === 422) {
+      if (context.policy === JSON.stringify(S.policy)) { S.errors = body.errors || []; S.errorPolicy = context.policy; }
+      toast("请求时的配置有错误，未完成试运行");
+    }
     else if (status !== 200) toast(body.error || `请求失败 ${status}`);
     else {
-      S.trial = body.decision || { assessment: body.assessment, error: body.error, ranking: [] }; S.errors = [];
+      S.trial = body.decision || { assessment: body.assessment, error: body.error, ranking: [] }; S.trialContext = context;
+      if (S.errorPolicy === context.policy) { S.errors = []; S.errorPolicy = ""; }
       // show the territory for the task's own type, so the map agrees with the ranking
       const ch = (S.trial.assessment || {}).choices || {};
-      for (const d of dims("choice")) if (ch[d.id]) S.choice[d.id] = ch[d.id]; else delete S.choice[d.id];
+      if (!trialStale() && choiceAtStart === JSON.stringify(S.choice)) {
+        for (const d of dims("choice")) if (ch[d.id]) S.choice[d.id] = ch[d.id]; else delete S.choice[d.id];
+      }
     }
-  } finally { S.trialBusy = false; render(); }
+  } catch (ex) { if (ex.message !== "unauthorized") toast(`试运行失败：${ex.message}`); }
+  finally { S.trialBusy = false; renderTrialState(); }
 }
 
 // ---------------------------------------------------------------- settings + json
@@ -867,11 +1069,21 @@ function setPath(obj, path, value) {
 
 // ---------------------------------------------------------------- save / revert
 async function save() {
-  const { status, body } = await api("/api/policy", { method: "PUT", body: JSON.stringify(S.policy) });
-  if (status === 200) { S.base = JSON.stringify(S.policy); S.source = "user"; S.path = body.path; S.errors = []; toast("已保存，立即生效"); }
-  else if (status === 422) { S.errors = body.errors || []; toast(`有 ${S.errors.length} 处错误，未保存`); }
-  else toast(body.error || `保存失败 ${status}`);
-  render();
+  if (S.saveBusy || !S.policy) return;
+  const submitted = JSON.stringify(S.policy);
+  S.saveBusy = true; if (!drag) H.group = null; renderStatus();
+  try {
+    const { status, body } = await api("/api/policy", { method: "PUT", body: submitted });
+    if (status === 200) {
+      S.base = submitted; S.source = "user"; S.path = body.path;
+      if (S.errorPolicy === submitted) { S.errors = []; S.errorPolicy = ""; }
+      toast(isDirty() ? "请求时的版本已保存；后续修改仍未保存" : "已保存，立即生效");
+    } else if (status === 422) {
+      if (submitted === JSON.stringify(S.policy)) { S.errors = body.errors || []; S.errorPolicy = submitted; }
+      toast(`提交版本有 ${(body.errors || []).length} 处错误，未保存${submitted === JSON.stringify(S.policy) ? "" : "；当前草稿已有新修改"}`);
+    } else toast(body.error || `保存失败 ${status}`);
+  } catch (ex) { if (ex.message !== "unauthorized") toast(`保存失败：${ex.message}`); }
+  finally { S.saveBusy = false; renderStatus(); renderErrors(); markErrors(); }
 }
 
 
@@ -881,10 +1093,24 @@ document.addEventListener("click", async (e) => {
   const tab = t.closest("#tabs button, [data-tab-go]");
   if (tab) { S.tab = tab.dataset.tab || tab.dataset.tabGo; render(); window.scrollTo(0, 0); return; }
   if (t.id === "btn-save") return save();
-  if (t.id === "btn-revert") { if (!isDirty() || confirm("放弃所有未保存的修改？")) await load(); return; }
+  if (t.id === "btn-undo") { historyStep(); return; }
+  if (t.id === "btn-redo") { historyStep(true); return; }
+  if (t.id === "btn-revert") {
+    if (!S.saveBusy && isDirty() && confirm("放弃所有未保存的修改？可以通过撤销恢复草稿。")) {
+      S.policy = JSON.parse(S.base); fixAxes(); fixChoice(); if (!selProfile()) S.sel = null;
+      changed({ all: true });
+    }
+    return;
+  }
   if (t.id === "btn-defaults") {
-    const { body } = await api("/api/policy/default");
-    S.policy = body.policy; fixAxes(); S.sel = null; toast("已载入内置默认值，保存后生效"); render(); return;
+    const before = JSON.stringify(S.policy);
+    try {
+      const defaults = S.defaults || (await api("/api/policy/default")).body.policy;
+      if (before !== JSON.stringify(S.policy)) { toast("读取默认值期间草稿已改变，请再次选择默认值"); return; }
+      if (!defaults) { toast("未能读取默认值"); return; }
+      S.policy = clone(defaults); fixAxes(); fixChoice(); S.sel = null; toast("已载入内置默认值，保存后生效"); changed({ all: true });
+    } catch (ex) { toast(`读取默认值失败：${ex.message}`); }
+    return;
   }
   const err = t.closest("[data-err]");
   if (err) {
@@ -893,12 +1119,14 @@ document.addEventListener("click", async (e) => {
     if ((m = path.match(/^profiles\[(\d+)\]/))) { S.tab = "chart"; S.sel = (profiles()[+m[1]] || {}).id || null; }
     else if ((m = path.match(/^dimensions\[(\d+)\]/))) { S.tab = "dims"; render(); $(`#dim-${m[1]}`)?.scrollIntoView({ block: "start" }); return; }
     else if (/^(aliases|scoring|backend|dispatch)/.test(path)) S.tab = "settings";
-    render(); return;
+    render();
+    const field = document.querySelector(`[data-path="${CSS.escape(path)}"]`);
+    field?.closest("details")?.setAttribute("open", ""); field?.focus(); field?.scrollIntoView({ block: "center" }); return;
   }
   const pick = t.closest("[data-pick]");
   if (pick && !t.matches("input")) { S.sel = pick.dataset.pick; renderChart(); renderEditor(); return; }
   const sample = t.closest("[data-sample]");
-  if (sample) { S.trialTask = sample.dataset.sample; const ta = $("#trial-task"); if (ta) ta.value = S.trialTask; return runTrial(); }
+  if (sample) { S.trialTask = sample.dataset.sample; const ta = $("#cmd") || $("#trial-task"); if (ta) { ta.value = S.trialTask; ta.focus(); } updateTrialValidity(); return; }
   const hb = t.closest("[data-harness]");
   if (hb) {
     const p = profById(hb.dataset.id || S.sel); if (!p) return;
@@ -962,7 +1190,8 @@ document.addEventListener("click", async (e) => {
       : { id, label: "新维度", type: "choice", weight: 1, instructions: "Which … fits this task?", options: { a: "Option A", b: "Option B" } });
     changed({ all: true }); setTimeout(() => $(`#dim-${S.policy.dimensions.length - 1}`)?.scrollIntoView(), 0);
   } else if (act === "run-trial") runTrial();
-  else if (act === "clear-trial") { S.trial = null; render(); }
+  else if (act === "clear-trial") { S.trial = null; S.trialContext = null; renderTrialState(); }
+  else if (act === "copy-command") copyCommand();
   else if (act === "new-alias") {
     const k = uniqueId("@alias", Object.keys(S.policy.aliases || {}));
     S.policy.aliases = S.policy.aliases || {}; S.policy.aliases[k] = profiles()[0].id; changed({ all: true });
@@ -974,38 +1203,56 @@ document.addEventListener("click", async (e) => {
       toast("已应用"); changed({ all: true });
     } catch (ex) { toast(`JSON 格式错误：${ex.message}`); }
   } else if (act === "apply-json") {
-    try { S.policy = JSON.parse($("#json-text").value); fixAxes(); if (S.sel && profIndex(S.sel) < 0) S.sel = null; toast("已应用到编辑器，记得保存"); changed({ all: true }); }
+    try {
+      const next = JSON.parse($("#json-text").value);
+      if (!next || !Array.isArray(next.profiles) || !Array.isArray(next.dimensions)
+          || next.dimensions.some((d) => !d || !["score", "choice"].includes(d.type) || (d.type === "score" ? !Array.isArray(d.levels) || d.levels.length < 2 : !d.options || typeof d.options !== "object" || Array.isArray(d.options)))
+          || !next.dimensions.some((d) => d.type === "score") || next.profiles.some((p) => !p || typeof p !== "object" || Array.isArray(p))) {
+        toast("配置需要 profiles、dimensions 数组，以及至少一个有效评分维度"); return;
+      }
+      S.policy = next; fixAxes(); fixChoice(); if (S.sel && profIndex(S.sel) < 0) S.sel = null; toast("已应用到编辑器，记得保存"); changed({ all: true });
+    }
     catch (ex) { toast(`JSON 格式错误：${ex.message}`); }
   }
 });
 
 document.addEventListener("input", (e) => {
   const t = e.target;
+  if (t.id === "profile-search") { S.search = t.value; updateList(); return; }
   if (t.dataset.f && !["id", "kind", "enabled"].includes(t.dataset.f)) {
     const p = selProfile(); if (!p) return;
     setProfileField(p, t.dataset.f, t);
-    changed({ chart: t.dataset.f === "label" });
+    changed({ chart: t.dataset.f === "label", group: t, defer: true });
   } else if (t.dataset.dim && ["label", "weight", "instructions"].includes(t.dataset.df)) {
     const d = S.policy.dimensions[+t.dataset.dim];
     d[t.dataset.df] = t.dataset.df === "weight" ? Number(t.value) : t.value;
-    changed();
+    changed({ group: t, defer: true });
   } else if (t.dataset.set && t.type !== "checkbox" && t.tagName !== "SELECT") {
     setPath(S.policy, t.dataset.set, t.type === "number" ? (t.value === "" ? undefined : Number(t.value)) : t.value);
-    changed();
+    changed({ group: t, defer: true });
   } else if (t.dataset.pt) {
     const p = selProfile(), d = dimById(t.dataset.pt); if (!p || !d) return;
+    if (t.value === "" || !Number.isFinite(Number(t.value))) return;
     setPoint(p, d, Number(t.value));
-    const row = t.closest(".pt"); if (row) row.querySelector(".pt-v").textContent = fmt(Number(t.value));
-    changed({ chart: true });
-  } else if (t.id === "trial-task" || t.id === "cmd") S.trialTask = t.value;
+    const row = t.closest(".pt");
+    if (row) {
+      row.querySelectorAll("[data-pt]").forEach((el) => { if (el !== t) el.value = getPoint(p, d); });
+      if (row.nextElementSibling) row.nextElementSibling.textContent = shortLevel(d.levels[Math.round(getPoint(p, d))] || "坐标超出刻度");
+    }
+    changed({ chart: true, group: t, defer: true });
+  } else if (t.id === "trial-task" || t.id === "cmd") { S.trialTask = t.value; updateTrialValidity(); }
 });
+document.addEventListener("focusout", (e) => { if (H.group === e.target) H.group = null; });
 
 document.addEventListener("change", (e) => {
   const t = e.target;
+  if (t.id === "profile-filter") { S.filter = t.value; updateList(); return; }
   if (t.dataset.axis) { S.axes[t.dataset.axis] = t.value; render(); return; }
-  if (t.dataset.choice !== undefined) { if (t.value) S.choice[t.dataset.choice] = t.value; else delete S.choice[t.dataset.choice]; refreshMap(0); return; }
+  if (t.dataset.choice !== undefined) { if (t.value) S.choice[t.dataset.choice] = t.value; else delete S.choice[t.dataset.choice]; render(); return; }
   if (t.dataset.act === "toggle-log") { S.showLog = t.checked; renderChart(); return; }
-  if (t.dataset.act === "toggle-backend") { S.useBackend = t.checked; return; }
+  if (t.dataset.act === "toggle-disabled") { S.showDisabled = t.checked; renderChart(); return; }
+  if (t.dataset.act === "toggle-labels") { S.showLabels = t.checked; renderChart(); return; }
+  if (t.dataset.act === "toggle-backend") { S.useBackend = t.checked; updateTrialValidity(); return; }
   if (t.dataset.act === "hide") { const p = selProfile(); if (p) { t.checked ? S.hidden.add(p.id) : S.hidden.delete(p.id); renderChart(); } return; }
   if (t.dataset.enable) { const q = profById(t.dataset.enable); if (q) { q.enabled = t.checked; changed({ chart: true, list: true }); } return; }
   const p = selProfile();
@@ -1014,7 +1261,10 @@ document.addEventListener("change", (e) => {
   if (t.dataset.f === "kind" && p) { setProfileField(p, "kind", t); changed({ chart: true, editor: true }); return; }
   if (t.dataset.f === "model" && p) { renderEditor(); return; }
   if (t.dataset.ptoff && p) { const d = dimById(t.dataset.ptoff); setPoint(p, d, t.checked ? null : (nLevels(d) - 1) / 2); changed({ chart: true, editor: true }); return; }
-  if (t.dataset.pt && p) { renderEditor(); return; } // refresh the level name under the slider // refresh effort choices for the new model
+  if (t.dataset.pt && p) {
+    if (t.value === "") t.value = getPoint(p, dimById(t.dataset.pt)) ?? "";
+    H.group = null; return;
+  }
   if (t.dataset.dim && t.dataset.df === "id") { renameDim(S.policy.dimensions[+t.dataset.dim], t.value); changed({ all: true }); return; }
   if (t.dataset.dim && t.dataset.df === "type") {
     const d = S.policy.dimensions[+t.dataset.dim];
@@ -1052,8 +1302,20 @@ document.addEventListener("pointercancel", onChartUp);
 document.addEventListener("pointerout", (e) => { if (!drag && e.target.closest && e.target.closest("#chart svg") && !e.relatedTarget?.closest?.("#chart svg")) readout(null); });
 window.addEventListener("beforeunload", (e) => { if (S.policy && isDirty()) { e.preventDefault(); e.returnValue = ""; } });
 document.addEventListener("keydown", (e) => {
-  if ((e.metaKey || e.ctrlKey) && e.key === "s") { e.preventDefault(); save(); return; }
-  if (e.key === "Enter" && e.target.id === "cmd" && !e.isComposing) { e.preventDefault(); runTrial(); return; }
+  if (e.isComposing) return;
+  const modifier = e.metaKey || e.ctrlKey, key = e.key.toLowerCase();
+  if (modifier && key === "s") { e.preventDefault(); save(); return; }
+  const editing = e.target.matches("input, textarea, select, [contenteditable]");
+  const deferredText = e.target.matches('[data-f="id"], [data-df="id"], [data-dimlist], [data-alias-key]');
+  const bound = !deferredText && e.target.matches("[data-f], [data-dim], [data-set], [data-pt], [data-ptoff], [data-enable], [data-alias-val]");
+  if (modifier && (key === "z" || key === "y") && (!editing || bound)) {
+    e.preventDefault(); historyStep(key === "y" || e.shiftKey); return;
+  }
+  if (e.key === "Enter" && ["cmd", "trial-task"].includes(e.target.id) && (modifier || e.target.tagName === "INPUT")) { e.preventDefault(); runTrial(); return; }
+  if (["Enter", " "].includes(e.key) && e.target.dataset.chartPick) {
+    e.preventDefault(); S.sel = e.target.dataset.chartPick; renderChart(); renderEditor();
+    document.querySelector(`[data-chart-pick="${CSS.escape(S.sel)}"]`)?.focus(); return;
+  }
   if (e.key === "Escape" && S.tab === "chart" && S.sel && !e.target.matches("input, textarea, select")) { S.sel = null; renderChart(); renderEditor(); }
 });
 
