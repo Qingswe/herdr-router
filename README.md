@@ -10,6 +10,14 @@ high effort spends quota on a one-line rename, and a small model fails at a
 design problem. herdr-router makes that choice from a policy you can see and
 edit, and explains each decision.
 
+https://github.com/user-attachments/assets/de887ed9-605b-4101-898b-51051ace720a
+
+*A 32-second recording ([MP4](docs/media/herdr-router-demo.mp4)): the Herdr
+prefix (Ctrl+B by default), then d, opens the router. It routes a review task
+to Codex with GPT-6.1 Sol at medium effort, and Codex starts in a new pane.
+Waiting time is shortened, and the local path in the popup header is hidden.
+The popup's labels are in Chinese.*
+
 ![Routing map: profile dots placed by difficulty and duration, with the background shaded by the profile that wins each area](docs/images/routing-map-en.png)
 
 *The routing map in the web editor. Each dot is a profile; the shading shows
