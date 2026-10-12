@@ -47,10 +47,11 @@ router/
   sessions.py   Session 持久化、短事务 checkpoint、父子关联与只读查询
   workspace.py 按需 worktree 预检/创建/身份复查；默认 shared 不调用 Git
   log.py        decisions.jsonl 追加（失败静默）
-  cli.py        argparse 子命令、终端渲染、popup、插件 action
+  cli.py        argparse 子命令、终端渲染、popup（自带 cbreak 行编辑器 + 后台派发 worker）、插件 action
   web.py        本地网页服务（ThreadingHTTPServer）
 web/            index.html / app.js / style.css（编辑器前端）
-skill/SKILL.md  Claude Code skill：教 agent 用 herdr-router dispatch
+skill/SKILL.md  通用 skill：教 agent 用 herdr-router dispatch、wait 和 read
+router/onboarding.py  setup/doctor：CLI、六种 agent skill、插件和快捷键；缺失提示
 tools/build_default_policy.py  从 AA 数据生成默认 policy
 tests/          test_router.py（引擎）、test_web.py（API 安全）、fixtures/（录制的 Jev 响应）
 ```
@@ -84,6 +85,8 @@ herdr pane split → herdr agent start <name> --kind K --pane P -- <args> → he
 派发先用 `agent prompt --wait --until working --until blocked --timeout 15000` 确认活动；stalled 时只补充一次 `agent wait` 观察 working/blocked，不重发。用户 `--wait` 的结束等待在确认后单独执行，且不传 `--until settled`（Herdr 没有这个状态）。等待结束超时仍保留 `prompt_status=confirmed`。
 
 每次调用 `dispatch()` 有 `dispatch_id`，finally 写一条终态记录（`event=dispatch`，保留旧字段），补充 `stage/status/prompt_status`。`not_sent` 是确定未发送，`unknown` 是可能已送达但无法确认，`confirmed` 是观察到提交后的活动。失败 `HerdrError` 带已知 pane/agent 和这些字段。CLI `--json` 成功 stdout 只有一个对象，失败 stdout 空、stderr 结构化错误；不要仅凭 exit 1 判断可以重试。
+
+popup 的调用约定和 CLI `dispatch` 子命令一致：回车拿到 Decision 后，popup 进程把 Decision 原样序列化到 `state/popup-job-*.json` 并 spawn 独立子命令 `popup-dispatch`（`start_new_session` 脱离 pane 进程组，stdio 全部丢弃），然后自己退出——popup 在命令退出时由 Herdr 关闭，焦点立即回到用户 pane。worker 跑 `dispatch()`：`confirmed` 就静默退出（新 pane 就是结果）；失败或 `prompt_status=unknown` 把结果 JSON 写进 `state/popup-result-*.json`，再 `plugin pane open` 重新弹窗（env `HERDR_ROUTER_RESULT` 指向该文件），重开失败写 `state/popup.log`。重开的 popup 只显示结果画面，读完后删除文件。手工在普通终端跑 popup（无 `HERDR_PLUGIN_ENTRYPOINT_ID`）时回车走同步内联路径，便于调试。
 
 `dispatch()` 在 prepare 前创建 Session（id = dispatch_id），关键执行边界独立提交 checkpoint，事务不能跨 Herdr RPC。发送前先存 `prompt/unknown`；这一写入失败时不调用 prompt，实际输出保持 `not_sent`。确认后的 checkpoint 和最后存储失败不能遮蔽原异常或已确认送达，也不能跳过用户要求的 wait，输出附带 `session_warning`；锁竞争用 `session_store_busy` 区分其他存储错误。`in_progress` 仅表示缺少终态，不能用它断言 agent 当前工作或任务成功；不靠 PID 猜完成，不自动恢复/重发。
 
@@ -145,7 +148,11 @@ agent 参数映射（`agents.build_args`）：claude `--model/--effort`；codex 
 ```bash
 cd ~/Projects/herdr-router
 
-# 全部测试（58 个，<1 秒，不联网）
+# 新机器安装 / 只读检查（安装不覆盖已有 skill、链接或冲突键）
+./bin/herdr-router setup
+./bin/herdr-router doctor --json
+
+# 全部测试（含 pty 驱动的 popup 编辑器用例，不联网）
 python3 -m unittest discover -s tests -t .
 python3 -m unittest tests.test_router.RegressionTest -v   # 只跑回归
 
@@ -207,7 +214,9 @@ p=model.load(); print(json.dumps(classify.systemone_request('把这个变量重�
 - 保存返回 422：`errors[].path` 形如 `profiles[3].point.difficulty`，前端会用 `data-path` 把对应输入框标红。
 
 **popup 卡住 / Herdr 看起来没反应**
-- 插件 popup 会抢焦点。`_ask()` 有 300 秒空闲自动退出。手动处理：`ps aux | grep "herdr-router popup"` 找到 pid 后 kill。
+- popup 是 Herdr 的 session-modal 资源：不是 pane、没有 pane ID、进程拿不到 `HERDR_PANE_ID`（只有 `HERDR_PLUGIN_*`），也不出现在 `pane list`；命令退出即关闭，焦点回到原 pane，且是单例（已有一个 popup 进程时再 open 只会复用它）。**任何提示符下按 Esc（或 Ctrl-C）都会退出进程、关闭窗口**——Esc 来自 popup 自带的 cbreak 行编辑器（readline 看不见 Esc，也量不准宽字符），Ctrl-C 走 ISIG 转成 KeyboardInterrupt 同样干净退出。空闲 300 秒 SIGALRM 自动退出。
+- 手动处理残留进程：`ps aux | grep "herdr-router popup"` 找到 pid 后 kill（进程一死窗就关）。
+- 后台派发的结果文件：待派发任务在 `state/popup-job-*.json`，worker 读取后删除；需要用户注意的结果在 `state/popup-result-*.json`，重开的 popup 读取后删除；重开失败追加进 `state/popup.log`。popup 单例已被占用时（用户自己开着窗口），worker 重开不会替换 env，结果只落在文件里，靠 session 日志兜底。
 - 用户经常从手机（Moshi）远程操作 Herdr，看不到桌面上的窗口。**测试时自己打开的 popup / 网页服务 / 浏览器，测完一定关掉。**
 
 ## 修改指南
@@ -241,6 +250,7 @@ p=model.load(); print(json.dumps(classify.systemone_request('把这个变量重�
 - Herdr 0.9.3。CLI 语法以 `herdr --help` / `herdr agent` / `herdr pane` 的输出为准。
 - 只在 `HERDR_ENV=1` 时操作 Herdr；默认 `--no-focus`，不要关闭不是自己创建的 pane / tab / workspace，不要 `herdr server stop`。
 - `agent start` 只能用于停在 shell 提示符的空 pane；router 总是先 `pane split` 出新 pane 再启动。
+- popup 与 `plugin pane close`：popup 没有 pane ID，`herdr plugin pane close` 只对插件拥有的普通 pane 有效（对普通 pane 会报 `plugin_pane_not_found`）；关闭 popup 的唯一路径是让它自己的命令退出。
 - agent 名字规则 `[a-z][a-z0-9_-]{0,31}`，router 默认名称含 `dispatch_id` 短后缀，再由 `herdr.unique_agent_name` 避免已存在的名称；命名和校验在 split 前完成。
 
 ## 已知限制 / 待办
@@ -248,4 +258,5 @@ p=model.load(); print(json.dumps(classify.systemone_request('把这个变量重�
 - 关键词兜底只覆盖三个内置维度。
 - opencode 交互模式不支持 effort（用模型默认档）。
 - 本机 droid 启动时报 `FACTORY_API_KEY is set but appears to be invalid`，而 herdr 仍报告启动成功（agent 立即退出）。凭据是用户的事，不要去读或改；dispatch 到 droid 前先提醒用户。
-- 还没做：在新 Claude 会话里测试 skill 触发；Herdr 快捷键绑定（README 有示例）；Moshi 的 Web 标签能否打开编辑器。
+- 新机器安装走 `bin/herdr-router setup`；skill 用户目录见 README；Codex/Cursor/OpenCode/Droid 共享 ~/.agents/skills。重复 setup 安全；doctor 不写文件、不调用 Herdr。测试配置和用户目录全部隔离。
+- 还没做：各 agent 新会话的实际 skill 触发验收；Moshi 的 Web 标签能否打开编辑器。

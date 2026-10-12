@@ -1,19 +1,19 @@
 ---
 name: herdr-route
-description: Delegate a task to another coding agent through Herdr when the user has NOT said which agent, model, or effort to use. herdr-router assesses the task along configurable dimensions (difficulty, duration, scope, task type, …), ranks the configured agent profiles (claude/codex/kimi/cursor/droid/opencode with model and effort), then starts the winner in a sibling pane. Use when the user asks to hand off, delegate, parallelize, or "let another agent do" something inside Herdr. Requires HERDR_ENV=1. If the user names a specific agent, still use this but pin it with --kind or --profile.
+description: Delegates tasks to another coding agent through Herdr, selecting the agent, model, and effort with herdr-router. Use when the user asks to hand off, delegate, parallelize, or let another agent do work inside Herdr. Supports Claude Code, Codex, Kimi, Cursor, Droid, and OpenCode. If the user names an agent, model, or effort, honor it with --kind, --profile, --model, or --effort. Requires a local Herdr session and herdr-router on PATH.
 ---
 
 # herdr-route
 
-`herdr-router` picks the agent for you; the `herdr` skill covers everything after the launch.
+`herdr-router` picks the agent and launches it. This skill includes the follow-up commands; no separate `herdr` skill is required. Dispatch only when the user requests delegation or parallel work.
 
 ## Check
 
 ```bash
-test "${HERDR_ENV:-}" = 1 && command -v herdr-router
+{ test "${HERDR_ENV:-}" = 1 || test -n "${HERDR_SOCKET_PATH:-}"; } && command -v herdr-router
 ```
 
-If either fails, say so and stop.
+If this fails, stop and explain which prerequisite is missing. Run `herdr-router doctor` to inspect the local installation. Use `herdr-router setup` to repair missing integrations when the user asks for setup; start a new agent session afterward to load newly installed skills. Dispatch must run inside Herdr.
 
 ## Preview (optional, nothing launched)
 
@@ -28,12 +28,14 @@ herdr-router route "<task>" --json     # full ranking
 herdr-router dispatch "<task>" --json
 ```
 
-This splits the calling pane (`--no-focus`), starts the chosen agent with its model and effort flags, submits the task once, and confirms Herdr observed `working` or `blocked`. The JSON reply carries `agent` (a live Herdr agent name), `pane_id`, `dispatch_id`, `stage`, `prompt_status`, and the full `decision`. `confirmed` means activity was observed; it does not prove the task succeeded. Then continue with the herdr skill:
+This splits the calling pane (`--no-focus`), starts the chosen agent with its model and effort flags, submits the task once, and confirms Herdr observed `working` or `blocked`. The JSON reply carries `agent` (a live Herdr agent name), `pane_id`, `dispatch_id`, `stage`, `prompt_status`, and the full `decision`. `confirmed` means activity was observed; it does not prove the task succeeded. Use the returned agent name to wait and inspect the result:
 
 ```bash
 herdr agent wait <agent> --timeout 600000
 herdr agent read <agent> --source recent-unwrapped --lines 120
 ```
+
+Inspect the actual output and relevant files before reporting completion. If the agent is blocked, read its pane and report what needs user input. Keep the pane available; do not close it, resend the task, or answer trust/update dialogs automatically.
 
 Write the task as a complete, self-contained instruction: the receiving agent has none of your context.
 

@@ -375,11 +375,15 @@ agents.
 ## Herdr plugin actions
 
 - `herdr-router.route` opens a popup. Type a task and press Enter to see the
-  ranking, then press Enter again to dispatch. Type `k`, `m`, or `e` and press
-  Enter to change the profile, model, or effort; `t` edits the task and `q`
-  cancels. The popup closes about a second after a successful dispatch; a
-  failure stays on screen with recovery hints until you press Enter. It exits
-  on its own after 300 seconds of inactivity.
+  ranking, then press Enter again to dispatch: the popup hides itself
+  immediately and a background worker creates the pane, so the popup does not
+  hold your focus until the agent is ready. A failure or an unconfirmed
+  delivery reopens the popup later with the error and recovery hints (close it
+  with Enter or Esc); a confirmed delivery stays quiet — the new pane is the
+  result. Type `k`, `m`, or `e` and press Enter to change the profile, model,
+  or effort; `t` edits the task. `Esc` (or Ctrl-C) closes the popup from any
+  prompt; `q` and Enter do the same at the menu. It exits on its own after
+  300 seconds of inactivity.
 - `herdr-router.route-selection` does the same with the selected terminal text
   as the task.
 - `herdr-router.open-editor` starts the editor in the background if needed and
@@ -521,8 +525,12 @@ know. Start it with `--allow-host <name>`.
 **Port 8765 is in use.** Check `lsof -iTCP:8765 -sTCP:LISTEN`, stop a background
 editor with `herdr-router ui --stop`, or pick another `--port`.
 
-**The popup seems stuck.** It exits after 300 seconds of inactivity. To end it
-sooner, find it with `ps aux | grep "herdr-router popup"` and stop that process.
+**The popup seems stuck.** Press `Esc` — it closes from any prompt. It also
+exits after 300 seconds of inactivity; to end it sooner, find it with
+`ps aux | grep "herdr-router popup"` and stop that process. A background
+dispatch that could not confirm delivery reopens the popup by itself; its
+outcomes are also readable in the session list (`herdr-router session list`),
+and repeated reopen problems are logged to `popup.log` in the state directory.
 
 ## Tests
 

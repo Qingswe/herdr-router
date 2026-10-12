@@ -81,25 +81,56 @@ explains how.
 ```bash
 git clone https://github.com/Qingswe/herdr-router.git
 cd herdr-router
-router_checkout="$PWD"
-mkdir -p ~/.local/bin
-ln -s "$router_checkout/bin/herdr-router" ~/.local/bin/herdr-router
-export PATH="$HOME/.local/bin:$PATH"
-herdr plugin link "$router_checkout"
-herdr-router --version
+./bin/herdr-router setup
 ```
 
-The CLI symlink and the Herdr plugin both run files from this checkout, so keep
-it where it is. Add `~/.local/bin` to `PATH` in your shell startup file. If
-`~/.local/bin/herdr-router` already exists, check what it points to before
-replacing it.
+`setup` links the CLI into `~/.local/bin`, detects installed agent CLIs,
+installs the bundled `herdr-route` skill for them, links the Herdr plugin,
+and adds available router shortcuts. It reports each result and preserves
+existing skills, CLI links, disabled/different plugin installations, and
+conflicting keys. Existing Herdr config is backed up before changes. It tries
+to reload the running server; if the server is stopped, start Herdr to apply
+the saved config. No agent CLI, account, or model subscription is installed.
 
-Optional Claude Code skill, so Claude Code can hand tasks off through the router:
+The CLI, plugin, and skills run from this checkout, so keep it where it is.
+Add `~/.local/bin` to `PATH` in your shell startup file if setup reports it
+missing. Start a new agent session after setup to load the skill.
+
+Check the installation at any time (read-only, no server or network needed):
 
 ```bash
-mkdir -p ~/.claude/skills
-ln -s "$router_checkout/skill" ~/.claude/skills/herdr-route
+./bin/herdr-router doctor
+herdr-router doctor --json
 ```
+
+Both commands exit with status 1 when required items are missing, conflicting,
+or invalid. PATH and deferred config reload reminders are warnings. To install
+or check skills for specific agents, repeat `--agent`:
+
+```bash
+./bin/herdr-router setup --agent claude --agent codex
+./bin/herdr-router setup --no-shortcuts   # keep shortcuts entirely manual
+./bin/herdr-router setup --no-plugin      # skip plugin linking
+```
+
+Skill locations (each contains `herdr-route/SKILL.md`):
+
+| Agent | User skill directory |
+|---|---|
+| [Claude Code](https://code.claude.com/docs/en/skills) | `~/.claude/skills` (`CLAUDE_CONFIG_DIR` overrides `.claude`) |
+| [Codex](https://learn.chatgpt.com/docs/build-skills) | `~/.agents/skills` |
+| [Cursor](https://prod.cursor.com/docs/skills) | `~/.agents/skills` |
+| [Kimi](https://github.com/MoonshotAI/kimi-cli/blob/main/docs/en/customization/skills.md) | `~/.kimi/skills` |
+| [OpenCode](https://opencode.ai/docs/skills/) | `~/.agents/skills` |
+| [Droid](https://docs.factory.com/harness/skills) | `~/.agents/skills` |
+
+Compatible agents share one skill link in `~/.agents/skills`.
+The skill includes dispatch, wait, and result inspection; a separate `herdr`
+skill is not required. It teaches agents to delegate when you request it.
+Human-facing terminal commands and the popup remind you to run setup if a
+detected agent's skill is missing or points to another checkout. JSON output
+stays unchanged. `herdr plugin link` or `herdr plugin install` on its own does
+not run this setup; run the checkout's `bin/herdr-router setup` afterward.
 
 ## Usage
 
@@ -138,8 +169,9 @@ keeps the last 10 versions.
 
 ## Herdr shortcuts
 
-After linking the plugin, add these bindings to `~/.config/herdr/config.toml`
-(choose other keys if these are already in use):
+`setup` adds these bindings to `~/.config/herdr/config.toml` (or
+`HERDR_CONFIG_PATH`), preserving keys already in use. If you skipped shortcuts
+or need different keys, add them manually:
 
 ```toml
 [[keys.command]]
@@ -160,7 +192,7 @@ command = "herdr-router.open-editor"
 
 Run `herdr server reload-config` to apply them. `prefix` means your configured
 Herdr prefix key: press it first, then the key below. Linking the plugin alone
-does not install these bindings.
+does not install these bindings; `setup` does.
 
 | After the prefix | Action |
 |---|---|
@@ -169,9 +201,12 @@ does not install these bindings.
 | `Shift+e` | Open the local web editor |
 
 In the popup, enter a task and press Enter to see the recommendation. Press
-Enter again to dispatch it in a new pane. To adjust it, type `k` (profile),
-`m` (model), `e` (effort), or `t` (task), then press Enter; type `q` and press
-Enter to cancel. The [guide](docs/guide.md#herdr-plugin-actions) has more details.
+Enter again to dispatch it: the popup hides itself at once and dispatches in
+the background, so you keep working while the pane is created; a failure or an
+unconfirmed delivery reopens it with the details. `Esc` (or Ctrl-C) closes the
+popup from any prompt. To adjust instead, type `k` (profile), `m` (model),
+`e` (effort), or `t` (task), then press Enter. The
+[guide](docs/guide.md#herdr-plugin-actions) has more details.
 
 ## More
 

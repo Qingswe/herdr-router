@@ -5,12 +5,17 @@
   herdr-router dispatch <task>     route, then split a pane, start the agent, send the task
   herdr-router ui                  web editor for dimensions and agent profiles
   herdr-router popup               interactive picker (Herdr plugin popup pane)
+  herdr-router popup-dispatch      background dispatch worker used by the popup (internal)
   herdr-router action <id>         Herdr plugin action entrypoint
+  herdr-router setup               install CLI, agent skills, plugin, and shortcuts
+  herdr-router doctor              check the local installation without changing it
 """
 
 from __future__ import annotations
 
 import argparse
+import codecs
+import errno
 import json
 import os
 import select
@@ -18,12 +23,16 @@ import shlex
 import shutil
 import signal
 import stat
+import subprocess
 import sys
+import termios
 import time
+import tty
 import unicodedata
+from collections import deque
 from pathlib import Path
 
-from . import PLUGIN_ID, __version__, agents, herdr, model, sessions, workspace as workspaces
+from . import PLUGIN_ID, __version__, agents, herdr, model, onboarding, sessions, workspace as workspaces
 from .classify import assess, parse_overrides
 from .dispatch import dispatch
 from .score import Decision, NoAgentAvailable, decide
@@ -79,17 +88,22 @@ TEXT = {
         "current_pane": "(当前)",
         "selected_task": "选中文本作为任务：",
         "task": "任务",
-        "keys": "Enter 派发 · k 换档位 · m 换模型 · e 换 effort · t 改任务 · q 取消",
+        "keys": "Enter 派发 · k 换档位 · m 换模型 · e 换 effort · t 改任务 · q/Esc 关闭",
+        "first_keys": "Esc 关闭 · 输入或粘贴任务后回车",
         "profile_prompt": "档位编号> ",
         "model_prompt": "模型名（留空=档位默认）> ",
         "effort_prompt": "effort 编号> ",
+        "bg_dispatch": "已转后台派发，此窗口即将关闭；新 agent 的 pane 就绪即结果。",
+        "close": "按回车或 Esc 关闭",
+        "result_failed": "✗ 后台派发失败：{error}",
+        "result_warning": "⚠ 已派发，但送达未确认（{status}）。",
+        "result_session_warning": "Session 记录警告：{warning}",
         "starting": "正在启动 {kind}，最多等 {seconds} 秒，随后确认任务送达…",
         "confirmed": "✓ 任务已确认送达 {agent}（pane {pane}）",
         "session_warning": "Session 记录未能更新：{warning}。任务已送达，请查看原 pane。",
         "failed": "✗ 派发失败：{error}",
         "pane_screen": "pane {pane} 现在的画面：",
         "empty_screen": "(空)",
-        "close": "按回车关闭",
         "worktree_check": "正在检查隔离工作区；Git 准备总预算 {ms} ms…",
         "worktree_budget": "Git 准备预算 {ms} ms；路径与分支将在实际派发时分配。",
         "worktree_create": "将创建按需 worktree，再启动 agent…",
@@ -108,17 +122,22 @@ TEXT = {
         "current_pane": "(current)",
         "selected_task": "Selected text as the task:",
         "task": "Task",
-        "keys": "Enter dispatch · k profile · m model · e effort · t edit task · q cancel",
+        "keys": "Enter dispatch · k profile · m model · e effort · t edit task · q/Esc close",
+        "first_keys": "Esc closes · Enter submits the task",
         "profile_prompt": "Profile number> ",
         "model_prompt": "Model (empty = profile default)> ",
         "effort_prompt": "Effort number> ",
+        "bg_dispatch": "Dispatching in the background; this popup closes now. The new agent pane is the result.",
+        "close": "Press Enter or Esc to close",
+        "result_failed": "✗ Background dispatch failed: {error}",
+        "result_warning": "⚠ Dispatched, but delivery is unconfirmed ({status}).",
+        "result_session_warning": "Session record warning: {warning}",
         "starting": "Starting {kind}; waiting up to {seconds} s, then confirming delivery…",
         "confirmed": "✓ Task delivered to {agent} (pane {pane})",
         "session_warning": "Could not update the session record: {warning}. The task was delivered; check the original pane.",
         "failed": "✗ Dispatch failed: {error}",
         "pane_screen": "Current screen of pane {pane}:",
         "empty_screen": "(empty)",
-        "close": "Press Enter to close",
         "worktree_check": "Checking the isolated workspace; total Git budget {ms} ms…",
         "worktree_budget": "Git budget {ms} ms; the path and branch are assigned at dispatch.",
         "worktree_create": "Creating a worktree, then starting the agent…",
@@ -423,33 +442,344 @@ def run_action(action_id: str, lang: str = "zh") -> int:
 
 POPUP_IDLE_S = 300
 POPUP_DONE_S = 1.2
+# Allow fragmented key sequences over a remote PTY; a lone Esc still exits within 250 ms.
+_ESC_GAP_S = 0.25
+
+# Control keys the editor handles; CSI sequences (arrows, Home, End, Delete) map through _csi().
+_KEYS = {
+    "\x7f": "backspace", "\x08": "backspace",  # Backspace, Ctrl-H
+    "\x01": "home", "\x05": "end",  # Ctrl-A, Ctrl-E
+    "\x02": "left", "\x06": "right",  # Ctrl-B, Ctrl-F
+    "\x04": "eof", "\x15": "clear", "\x0b": "kill",  # Ctrl-D, Ctrl-U, Ctrl-K
+}
+
+
+class _PopupExit(Exception):
+    """Esc, Ctrl-C, EOF or the idle alarm: the user wants the popup gone."""
+
+
+_QUEUED: list[str] = []  # chars read past the accepted line (remainder of a multi-line paste)
+_PASTE_CARRY = b""  # an incomplete UTF-8 character in that remainder
+_PASTE_CR = False  # skip the LF half of a CRLF accepted by the editor
 
 
 def _ask(prompt: str) -> str:
-    """input() that gives up after POPUP_IDLE_S, so an unattended popup cannot hold focus forever.
+    """One line of input that always has a way out: Esc (or Ctrl-C/EOF) raises _PopupExit.
 
-    Keep prompts short and ASCII: readline mis-measures wide characters, and a prompt longer than the
-    pane makes it redraw over the lines above.
+    On a tty this runs a small cbreak editor instead of readline, because readline cannot see Esc
+    and mis-measures CJK widths. The editor measures the actual PTY width for wrapped input.
     """
     signal.alarm(POPUP_IDLE_S)
     try:
+        if sys.stdin.isatty() and sys.stdout.isatty():
+            return _editor(prompt)
         return input(prompt)
     finally:
         signal.alarm(0)
 
 
-def _drain_paste() -> list[str]:
-    """Lines of a multi-line paste that input() left in the tty queue (it returns at the first newline)."""
-    lines: list[str] = []
+def _input_cbreak(fd: int) -> None:
+    # TCSAFLUSH (tty's default) can discard input already queued in the PTY, including paste tails.
+    tty.setcbreak(fd, termios.TCSANOW)  # keep ISIG, so Ctrl-C still raises KeyboardInterrupt
+    mode = termios.tcgetattr(fd)
+    mode[0] &= ~(termios.ICRNL | termios.INLCR | termios.IGNCR)
+    termios.tcsetattr(fd, termios.TCSANOW, mode)  # keep pasted CRLF distinguishable from LF
+
+
+def _editor(prompt: str) -> str:
+    fd = sys.stdin.fileno()
+    old = termios.tcgetattr(fd)
     try:
-        while select.select([0], [], [], 0.08)[0]:
-            chunk = os.read(0, 65536)
+        _input_cbreak(fd)
+        sys.stdout.write("\x1b[?2004h")
+        sys.stdout.flush()
+        return _edited_line(prompt, fd)
+    finally:
+        try:
+            sys.stdout.write("\x1b[?2004l")
+            sys.stdout.flush()
+        finally:
+            termios.tcsetattr(fd, termios.TCSADRAIN, old)
+
+
+def _decode_chunk(data: bytes) -> tuple[str, bytes]:
+    """Decode one read; a UTF-8 sequence split across reads is carried over to the next one."""
+    decoder = codecs.getincrementaldecoder("utf-8")("replace")
+    text = decoder.decode(data)
+    carry, _ = decoder.getstate()
+    return text, carry
+
+
+def _csi(nxt: str, pull, unread) -> str:
+    """Consume CSI/SS3 keys, leaving an interrupted sequence's control key for the editor."""
+    if nxt not in ("[", "O"):
+        if ord(nxt) < 0x20:
+            unread(nxt)
+        return ""  # one meta-key byte has already been consumed; do not eat the next key
+    params = ""
+    intermediate = False
+    while True:
+        # Once a sequence prefix arrived, it is no longer a lone Esc. Keep its state across
+        # slow reads; a control key (including another Esc) can interrupt a truncated sequence.
+        c = pull()
+        if not c:
+            return ""  # an incomplete key sequence is harmless; only a lone Esc closes
+        if 0x30 <= ord(c) <= 0x3F:
+            params += c
+        elif 0x20 <= ord(c) <= 0x2F:
+            intermediate = True
+        elif 0x40 <= ord(c) <= 0x7E:
+            if intermediate:
+                return ""
+            if c == "~" and nxt == "[":
+                return {"1": "home", "3": "delete", "4": "end", "7": "home",
+                        "8": "end", "200": "paste"}.get(params, "")
+            return {"A": "up", "B": "down", "D": "left", "C": "right",
+                    "H": "home", "F": "end"}.get(c, "")
+        else:
+            unread(c)  # Enter, Backspace or another Esc must still work after a torn CSI
+            return ""
+
+
+def _edited_line(prompt: str, fd: int) -> str:
+    """Cbreak editor with visual-row motion; only a lone Escape closes the popup."""
+    global _PASTE_CARRY, _PASTE_CR
+    out_stream = sys.stdout
+
+    class _Out:
+        def __init__(self):
+            self._buf: list[str] = []
+
+        def write(self, text: str) -> None:
+            self._buf.append(text)
+
+        def flush(self) -> None:
+            if self._buf:
+                out_stream.write("".join(self._buf))
+                self._buf.clear()
+            out_stream.flush()
+
+    out = _Out()
+    carry = b""
+    queue: deque[str] = deque()
+    buf: list[str] = []
+    cur = 0
+    preferred_col: int | None = None
+    dirty = True
+    screen_row = viewport_top = 0
+
+    def size() -> tuple[int, int]:
+        try:
+            columns, lines = os.get_terminal_size(fd)
+        except OSError:
+            columns, lines = 80, 24
+        return columns or 80, lines or 24
+
+    def layout() -> tuple[list[str], list[tuple[int, int]]]:
+        """Map every input boundary to its actual row/column, including prompt and wide wraps."""
+        columns, _ = size()
+        rows = [""]
+        col = 0
+
+        def put(ch: str) -> None:
+            nonlocal col
+            if ch == "\n":
+                rows.append("")
+                col = 0
+                return
+            if ch == "\t":
+                for _ in range(8 - col % 8):
+                    put(" ")
+                return
+            if ord(ch) < 0x20 or ch == "\x7f":
+                for visible in "^" + chr(ord(ch) ^ 0x40):
+                    put(visible)
+                return
+            w = 0 if unicodedata.category(ch) in ("Mn", "Me", "Cf") else _cells(ch)
+            if w > columns:  # a one-column terminal cannot display a double-width glyph
+                ch, w = "?", 1
+            if w and col + w > columns:
+                rows.append("")
+                col = 0
+            rows[-1] += ch
+            col += w
+
+        def position() -> tuple[int, int]:
+            # Materialise the terminal's delayed wrap so the cursor never sits past the last cell.
+            return (len(rows), 0) if col == columns else (len(rows) - 1, col)
+
+        for ch in prompt:
+            put(ch)
+        positions = [position()]
+        for ch in buf:
+            put(ch)
+            positions.append(position())
+        if col == columns:
+            rows.append("")
+        return rows, positions
+
+    def repaint() -> None:
+        nonlocal dirty, screen_row, viewport_top
+        rows, positions = layout()
+        row, col = positions[cur]
+        _, lines = size()
+        height = max(1, lines - 1)
+        viewport_top = min(viewport_top, max(0, len(rows) - height))
+        if row < viewport_top:
+            viewport_top = row
+        elif row >= viewport_top + height:
+            viewport_top = row - height + 1
+        visible = rows[viewport_top:viewport_top + height]
+        out.write("\r")
+        if screen_row:
+            out.write(f"\x1b[{screen_row}A")
+        out.write("\x1b[J" + "\r\n".join(visible))
+        # CR cancels pending autowrap, including when the last visible row fills the terminal.
+        out.write("\r")
+        screen_row = row - viewport_top
+        up = len(visible) - 1 - screen_row
+        if up:
+            out.write(f"\x1b[{up}A")
+        if col:
+            out.write(f"\x1b[{col}C")
+        dirty = False
+
+    def flush() -> None:
+        if dirty:
+            repaint()
+        out.flush()
+
+    def pull(timeout: float | None = None) -> str:
+        nonlocal carry
+        deadline = time.monotonic() + timeout if timeout is not None else None
+        while not queue:
+            flush()  # render once per read, rather than once per character in a large paste
+            remaining = max(0, deadline - time.monotonic()) if deadline is not None else None
+            if not select.select([fd], [], [], remaining)[0]:
+                return ""
+            try:
+                data = os.read(fd, 65536)
+            except OSError as error:
+                if error.errno == errno.EIO:  # PTY master closed (Linux reports EIO, macOS EOF)
+                    raise _PopupExit from None
+                raise
+            if not data:
+                raise _PopupExit
+            text, carry = _decode_chunk(carry + data)
+            queue.extend(text)
+        return queue.popleft()
+
+    def paste() -> str:
+        chars: list[str] = []
+        end = "\x1b[201~"
+        while True:
+            chars.append(pull())
+            if len(chars) >= len(end) and "".join(chars[-len(end):]) == end:
+                return "".join(chars[:-len(end)]).replace("\r\n", "\n").replace("\r", "\n")
+
+    try:
+        while True:
+            ch = pull()
+            if ch in ("\r", "\n"):
+                _QUEUED.extend(queue)
+                _PASTE_CARRY = carry  # partial UTF-8 in the next pasted line belongs to the drain
+                _PASTE_CR = ch == "\r"
+                queue.clear()
+                cur = len(buf)
+                dirty = True
+                flush()
+                out.write("\r\n")
+                out.flush()
+                return "".join(buf)
+            if ch == "\x1b":
+                nxt = pull(_ESC_GAP_S)
+                if not nxt:
+                    raise _PopupExit
+                action = _csi(nxt, pull, queue.appendleft)
+                if not action:
+                    continue
+            else:
+                action = _KEYS.get(ch, "")
+                if action == "eof":
+                    action = "delete" if buf else "close"
+            if action in ("up", "down"):
+                _, positions = layout()
+                row, col = positions[cur]
+                if preferred_col is None:
+                    preferred_col = col
+                target = row + (1 if action == "down" else -1)
+                candidates = [i for i, (r, _) in enumerate(positions) if r == target]
+                if candidates:
+                    cur = min(candidates, key=lambda i: (abs(positions[i][1] - preferred_col),
+                                                         positions[i][1] > preferred_col, -i))
+                dirty = True
+                continue
+            preferred_col = None
+            if not action:
+                if ord(ch) >= 0x20:
+                    buf.insert(cur, ch)
+                    cur += 1
+                    dirty = True
+                continue
+            if action == "close":
+                raise _PopupExit
+            if action == "paste":
+                text = paste()
+                buf[cur:cur] = text
+                cur += len(text)
+            elif action == "left":
+                cur = max(0, cur - 1)
+            elif action == "right":
+                cur = min(len(buf), cur + 1)
+            elif action == "home":
+                cur = 0
+            elif action == "end":
+                cur = len(buf)
+            elif action == "backspace":
+                if cur:
+                    cur -= 1
+                    del buf[cur]
+            elif action == "delete":
+                if cur < len(buf):
+                    del buf[cur]
+            elif action == "clear":
+                buf.clear()
+                cur = 0
+            elif action == "kill":
+                del buf[cur:]
+            dirty = True
+    finally:
+        flush()
+
+
+def _drain_paste() -> list[str]:
+    """Preserve unbracketed multi-line paste, including UTF-8 split after the accepted line."""
+    global _PASTE_CARRY, _PASTE_CR
+    text = "".join(_QUEUED)
+    _QUEUED.clear()
+    carry, _PASTE_CARRY = _PASTE_CARRY, b""
+    skip_lf, _PASTE_CR = _PASTE_CR, False
+    old = None
+    try:
+        fd = sys.stdin.fileno()
+        if sys.stdin.isatty():
+            old = termios.tcgetattr(fd)
+            _input_cbreak(fd)  # a trailing pasted line may not end with a newline
+        while select.select([fd], [], [], 0.08)[0]:
+            chunk = os.read(fd, 65536)
             if not chunk:
                 break
-            lines += chunk.decode("utf-8", "replace").splitlines()
+            decoded, carry = _decode_chunk(carry + chunk)
+            text += decoded
     except (OSError, ValueError):
         pass
-    return lines
+    finally:
+        if old is not None:
+            termios.tcsetattr(fd, termios.TCSADRAIN, old)
+    text += carry.decode("utf-8", "replace")
+    if skip_lf and text.startswith("\n"):
+        text = text[1:]
+    return text.replace("\r\n", "\n").replace("\r", "\n").splitlines()
 
 
 def _ask_task(prompt: str = TEXT["zh"]["task_prompt"]) -> str:
@@ -482,16 +812,28 @@ def _pick(prompt: str, options: list[str]) -> str | None:
 
 
 def run_popup(policy: dict, lang: str = "zh") -> int:
+    """Popup body. The pane closes when this process exits, so every exit path is a close.
+
+    Esc raises _PopupExit everywhere (including mid-typing), Ctrl-C is treated the same way, and the
+    SIGALRM idle timeout still fires while the editor blocks on a read.
+    """
+    try:
+        return _popup_session(policy, lang)
+    except _PopupExit:  # Esc or Ctrl-D on an empty line
+        return 0
+    except (KeyboardInterrupt, SystemExit, EOFError):  # Ctrl-C; idle alarm; closed input
+        return 0
+
+
+def _popup_session(policy: dict, lang: str) -> int:
     text = TEXT[lang]
+    if rf := os.environ.get("HERDR_ROUTER_RESULT"):
+        return _popup_result_screen(rf, lang)
     try:
         dcfg = dispatch_settings(policy)
     except herdr.HerdrError as e:
         print(f"✗ {e}\n{dispatch_recovery(e, lang)}")
         return 1
-    try:
-        import readline  # noqa: F401  (line editing for input())
-    except ImportError:
-        pass
     signal.signal(signal.SIGALRM, _idle_exit)
     target = os.environ.get("HERDR_ROUTER_TARGET")
     cwd = os.environ.get("HERDR_ROUTER_CWD") or os.getcwd()
@@ -503,6 +845,8 @@ def run_popup(policy: dict, lang: str = "zh") -> int:
             p.unlink(missing_ok=True)
 
     print(text["header"].format(target=target or text["current_pane"], cwd=cwd) + "\n")
+    print_setup_hint(policy, lang, sys.stdout)
+    print(_wrap(text["first_keys"], _width(), 0) + "\n")
     if task:
         print(f"{text['selected_task']}\n  {task[:300]}{'…' if len(task) > 300 else ''}\n")
     else:
@@ -546,6 +890,23 @@ def run_popup(policy: dict, lang: str = "zh") -> int:
         if choice == "" and d:
             break
 
+    if os.environ.get("HERDR_PLUGIN_ENTRYPOINT_ID") == "popup":
+        # The popup hides itself by exiting; a detached worker runs the dispatch and only
+        # reopens the popup when the outcome needs attention (failure or unconfirmed delivery).
+        try:
+            _spawn_dispatch(d, task=task, target=target, cwd=cwd, dcfg=dcfg, lang=lang)
+        except OSError:
+            pass  # keep the task from being dropped: fall back to the inline path below
+        else:
+            print("\n" + text["bg_dispatch"], flush=True)
+            return 0
+    return _dispatch_inline(d, task=task, target=target, cwd=cwd, dcfg=dcfg, lang=lang)
+
+
+def _dispatch_inline(d: Decision, *, task: str, target: str | None, cwd: str,
+                     dcfg: dict, lang: str) -> int:
+    """Synchronous dispatch with visible progress: manual runs and background-spawn fallbacks."""
+    text = TEXT[lang]
     wait_s = int(dcfg.get("agent_start_timeout_ms", 60000)) // 1000
     print("\n" + text["starting"].format(kind=d.kind, seconds=wait_s), flush=True)
     try:
@@ -570,7 +931,140 @@ def run_popup(policy: dict, lang: str = "zh") -> int:
     return 1
 
 
+def _spawn_dispatch(d: Decision, *, task: str, target: str | None, cwd: str,
+                    dcfg: dict, lang: str) -> None:
+    """Hand the dispatch to a detached worker so the popup can close itself right away."""
+    job = {"lang": lang, "task": task, "cwd": cwd, "target_pane": target,
+           "direction": dcfg.get("direction", "auto"),
+           "start_timeout_ms": int(dcfg.get("agent_start_timeout_ms", 60000)),
+           "decision": d.to_dict()}
+    state = model.state_dir()
+    state.mkdir(parents=True, exist_ok=True)
+    payload = state / f"popup-job-{int(time.time() * 1000)}.json"
+    payload.write_text(json.dumps(job, ensure_ascii=False), encoding="utf-8")
+    script = Path(__file__).resolve().parent.parent / "bin" / "herdr-router"
+    try:
+        # start_new_session detaches the worker from the popup's process group, so the popup
+        # (and its pane teardown) cannot take the dispatch down with it.
+        subprocess.Popen([sys.executable, str(script), "popup-dispatch", "--payload", str(payload)],
+                         stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                         stderr=subprocess.DEVNULL, start_new_session=True)
+    except OSError:
+        payload.unlink(missing_ok=True)
+        raise
+
+
+def _decision_from_dict(raw: dict) -> Decision:
+    return Decision(profile_id=raw["profile_id"], profile_label=raw.get("profile_label", ""),
+                    kind=raw["kind"], model=raw.get("model"), effort=raw.get("effort"),
+                    args=list(raw.get("args") or []), prompt=raw.get("prompt", ""),
+                    reason=raw.get("reason", ""), assessment=raw.get("assessment") or {},
+                    ranking=raw.get("ranking") or [])
+
+
+def run_popup_dispatch(args) -> int:
+    """Background worker for the popup: run the dispatch, then surface outcomes needing attention.
+
+    Confirmed delivery stays silent — the new agent pane is the result. Unconfirmed delivery and
+    failures reopen the popup with the details; the user closes it with Enter or Esc.
+    """
+    p = Path(args.payload)
+    try:
+        job = json.loads(p.read_text(encoding="utf-8"))
+    except (OSError, ValueError) as e:
+        p.unlink(missing_ok=True)
+        _popup_notify({"kind": "failure", "code": "popup_job_unreadable", "message": str(e)}, "zh")
+        return 1
+    p.unlink(missing_ok=True)
+    lang = job.get("lang") if job.get("lang") in TEXT else "zh"
+    try:
+        d = _decision_from_dict(job["decision"])
+        r = dispatch(d, target_pane=job.get("target_pane"), cwd=job["cwd"],
+                     direction=job.get("direction", "auto"),
+                     start_timeout_ms=int(job.get("start_timeout_ms", 60000)), task=job["task"])
+    except Exception as error:
+        e = public_dispatch_error(error)
+        info = {"kind": "failure", "code": e.code, "message": e.message,
+                "pane_id": e.pane_id, "agent": e.agent, "stage": e.stage,
+                "prompt_status": e.prompt_status, "dispatch_id": e.dispatch_id,
+                "session_id": getattr(e, "session_id", None),
+                "session_warning": getattr(e, "session_warning", None),
+                "workspace": getattr(e, "workspace", None),
+                "recovery": dispatch_recovery(e, lang)}
+        _popup_notify(info, lang, cwd=job.get("cwd"))
+        return 1
+    if r.prompt_status != "confirmed" or r.session_warning:
+        info = {"kind": "warning", "code": "delivery_unconfirmed", "message": "",
+                "pane_id": r.pane_id, "agent": r.agent, "stage": r.stage,
+                "prompt_status": r.prompt_status, "dispatch_id": r.dispatch_id,
+                "session_id": r.session_id, "session_warning": r.session_warning,
+                "workspace": r.workspace}
+        if r.prompt_status != "confirmed":
+            probe = herdr.HerdrError("delivery_unconfirmed", "delivery not confirmed")
+            probe.pane_id, probe.agent = r.pane_id, r.agent
+            probe.prompt_status = r.prompt_status
+            info["recovery"] = dispatch_recovery(probe, lang)
+        _popup_notify(info, lang, cwd=job["cwd"])
+    return 0
+
+
+def _popup_notify(info: dict, lang: str, cwd: str | None = None) -> None:
+    """Persist the outcome and reopen the popup so the user sees it."""
+    state = model.state_dir()
+    state.mkdir(parents=True, exist_ok=True)
+    f = state / f"popup-result-{int(time.time() * 1000)}.json"
+    f.write_text(json.dumps(info, ensure_ascii=False), encoding="utf-8")
+    try:
+        herdr.plugin_pane_open(PLUGIN_ID, "popup", "popup", cwd=cwd,
+                               env={"HERDR_ROUTER_RESULT": str(f), "HERDR_ROUTER_LANGUAGE": lang})
+    except herdr.HerdrError as e:
+        with open(state / "popup.log", "a", encoding="utf-8") as log:
+            log.write(f"{time.strftime('%Y-%m-%d %H:%M:%S')} could not reopen the popup: "
+                      f"{e.code}: {e.message}; outcome in {f.name}\n")
+
+
+def _popup_result_screen(path: str, lang: str) -> int:
+    """Popup reopened after a background dispatch: show what happened, then let the user close it."""
+    text = TEXT[lang]
+    p = Path(path)
+    info = None
+    try:
+        info = json.loads(p.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        pass
+    finally:
+        p.unlink(missing_ok=True)
+    _clear()
+    if not isinstance(info, dict):
+        print(text["result_failed"].format(error=f"popup result unreadable ({path}); see popup.log"))
+        _ask("\n" + text["close"])
+        return 1
+    if info.get("kind") == "warning":
+        print(text["result_warning"].format(status=info.get("prompt_status", "unknown")))
+    else:
+        print(text["result_failed"].format(
+            error=f'{info.get("code", "error")}: {info.get("message", "")}'))
+    if sw := info.get("session_warning"):
+        print(text["result_session_warning"].format(warning=sw))
+    if info.get("recovery"):
+        print("\n" + _wrap(info["recovery"], _width(), 0))
+    if pane_id := info.get("pane_id"):
+        screen = herdr.pane_screen(pane_id)
+        print("\n" + text["pane_screen"].format(pane=pane_id))
+        print("  " + (screen.replace("\n", "\n  ") or text["empty_screen"]))
+    for key in ("dispatch_id", "session_id"):
+        if info.get(key):
+            print(f"{key}: {info[key]}")
+    _ask("\n" + text["close"])
+    return 0 if info.get("kind") == "warning" else 1
+
+
 # --------------------------------------------------------------------------
+
+def print_setup_hint(policy: dict, lang: str, stream) -> None:
+    if stream.isatty() and (hint := onboarding.setup_hint(policy, lang)):
+        print(hint, file=stream)
+
 
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(prog="herdr-router", description=__doc__,
@@ -578,6 +1072,14 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--version", action="version", version=f"herdr-router {__version__}")
     ap.add_argument("--policy", type=Path, help="policy JSON (default: config dir policy.json, else built-in)")
     sub = ap.add_subparsers(dest="cmd", required=True)
+    for name in ("setup", "doctor"):
+        setup = sub.add_parser(name, help="install local integrations" if name == "setup" else "check local integrations (read-only)")
+        setup.add_argument("--agent", action="append", choices=onboarding.SKILL_DIRS,
+                           help="agent skill to install/check (repeatable; default: detected CLIs)")
+        setup.add_argument("--json", action="store_true", help="machine-readable report")
+        if name == "setup":
+            setup.add_argument("--no-plugin", action="store_true", help="skip Herdr plugin linking")
+            setup.add_argument("--no-shortcuts", action="store_true", help="skip Herdr shortcut configuration")
 
     def task_cmd(name: str, help_: str, pick: bool = True) -> argparse.ArgumentParser:
         p = sub.add_parser(name, help=help_)
@@ -625,15 +1127,24 @@ def main(argv: list[str] | None = None) -> int:
     u.add_argument("--allow-host", action="append", default=[], help="extra Host name to accept (repeatable)")
     u.add_argument("--stop", action="store_true", help="stop a background editor server")
     sub.add_parser("popup", help="interactive picker (plugin pane)")
+    w = sub.add_parser("popup-dispatch", help="run one popup dispatch in the background (internal)")
+    w.add_argument("--payload", type=Path, required=True, help="JSON job file written by the popup")
     a = sub.add_parser("action", help="plugin action entrypoint")
     a.add_argument("action_id", choices=["route", "route-selection", "open-editor"])
 
     args = ap.parse_args(argv)
+    if args.cmd in ("setup", "doctor"):
+        return onboarding.run(args)
     if args.cmd == "session":
         return run_session(args)
+    if args.cmd == "popup-dispatch":
+        return run_popup_dispatch(args)  # background worker: no policy load, inherits popup env
     policy = model.load(args.policy)
     extend_path(policy)
     lang = language(policy)
+
+    if args.cmd in ("route", "explain", "dispatch", "classify") and not args.json:
+        print_setup_hint(policy, lang, sys.stderr)
 
     if args.cmd == "ui":
         from . import web

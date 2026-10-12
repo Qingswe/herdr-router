@@ -91,7 +91,7 @@ class TerminalLanguageTest(unittest.TestCase):
         self.assertEqual(ask.call_args_list[0].args[0], "Task> ")
         self.assertIn("Task  rename a variable", out)
         self.assertIn("Selected", out)
-        self.assertIn("Enter dispatch · k profile · m model · e effort · t edit task · q cancel", out)
+        self.assertIn("Enter dispatch · k profile · m model · e effort · t edit task · q/Esc close", out)
         self.assertIn("Starting codex; waiting up to 60 s", out)
         self.assertIn("✓ Task delivered to worker (pane w1:p2)", out)
         self.assertNotRegex(out, "[一-鿿]")
