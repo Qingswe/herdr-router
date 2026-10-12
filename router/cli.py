@@ -54,6 +54,105 @@ RENDER_LABELS = {
     "low_confidence": "低置信度→难度上调",
     "keyword_fallback": "不可用，已用关键词规则",
 }
+RENDER_LABELS_EN = {
+    "source": "Source",
+    "selection": "Selected",
+    "reason": "Reason",
+    "decision_model": "Assessor",
+    "launch_args": "Launch",
+    "low_confidence": "low confidence, difficulty raised",
+    "keyword_fallback": "unavailable, used keyword rules",
+}
+
+# English names for the shipped dimensions, used only while a policy keeps the shipped Chinese label.
+BUILTIN_DIMENSION_LABELS = {
+    "difficulty": ("难度", "Difficulty"),
+    "duration": ("时长", "Duration"),
+    "scope": ("范围", "Scope"),
+    "task_type": ("类型", "Type"),
+}
+
+TEXT = {
+    "zh": {
+        "task_prompt": "任务> ",
+        "header": "herdr-router  ·  目标 pane {target}  ·  {cwd}",
+        "current_pane": "(当前)",
+        "selected_task": "选中文本作为任务：",
+        "task": "任务",
+        "keys": "Enter 派发 · k 换档位 · m 换模型 · e 换 effort · t 改任务 · q 取消",
+        "profile_prompt": "档位编号> ",
+        "model_prompt": "模型名（留空=档位默认）> ",
+        "effort_prompt": "effort 编号> ",
+        "starting": "正在启动 {kind}，最多等 {seconds} 秒，随后确认任务送达…",
+        "confirmed": "✓ 任务已确认送达 {agent}（pane {pane}）",
+        "session_warning": "Session 记录未能更新：{warning}。任务已送达，请查看原 pane。",
+        "failed": "✗ 派发失败：{error}",
+        "pane_screen": "pane {pane} 现在的画面：",
+        "empty_screen": "(空)",
+        "close": "按回车关闭",
+        "worktree_check": "正在检查隔离工作区；Git 准备总预算 {ms} ms…",
+        "worktree_budget": "Git 准备预算 {ms} ms；路径与分支将在实际派发时分配。",
+        "worktree_create": "将创建按需 worktree，再启动 agent…",
+        "worktree_created": "创建 {ms} ms",
+        "agent_suffix": "（agent {agent}）",
+        "recover_confirmed": "任务已确认送达，但等待结束失败。请查看 {location}，不要重新派发。",
+        "recover_unknown": "任务可能已送达。请先查看 {location} 确认执行状态，不要直接重新派发。",
+        "recover_ready": " worktree 已准备好：{path}（分支 {branch}）。",
+        "recover_pane": "任务未发送，{location} 仍保留。请处理该 pane 的启动或确认问题，再决定如何发送任务。{suffix}",
+        "recover_worktree": "任务未发送。已记录 worktree 路径 {path}、分支 {branch}、状态 {state}；请先检查创建结果，再处理该工作区。",
+        "recover_default": "任务未发送。请修正错误；若创建 pane 时发生通信错误，先检查 Herdr 是否已留下 pane。",
+    },
+    "en": {
+        "task_prompt": "Task> ",
+        "header": "herdr-router  ·  target pane {target}  ·  {cwd}",
+        "current_pane": "(current)",
+        "selected_task": "Selected text as the task:",
+        "task": "Task",
+        "keys": "Enter dispatch · k profile · m model · e effort · t edit task · q cancel",
+        "profile_prompt": "Profile number> ",
+        "model_prompt": "Model (empty = profile default)> ",
+        "effort_prompt": "Effort number> ",
+        "starting": "Starting {kind}; waiting up to {seconds} s, then confirming delivery…",
+        "confirmed": "✓ Task delivered to {agent} (pane {pane})",
+        "session_warning": "Could not update the session record: {warning}. The task was delivered; check the original pane.",
+        "failed": "✗ Dispatch failed: {error}",
+        "pane_screen": "Current screen of pane {pane}:",
+        "empty_screen": "(empty)",
+        "close": "Press Enter to close",
+        "worktree_check": "Checking the isolated workspace; total Git budget {ms} ms…",
+        "worktree_budget": "Git budget {ms} ms; the path and branch are assigned at dispatch.",
+        "worktree_create": "Creating a worktree, then starting the agent…",
+        "worktree_created": "created in {ms} ms",
+        "agent_suffix": " (agent {agent})",
+        "recover_confirmed": "The task was delivered, but waiting for it to finish failed. Check {location}; do not dispatch it again.",
+        "recover_unknown": "The task may have been delivered. Check {location} first; do not dispatch it again blindly.",
+        "recover_ready": " The worktree is ready: {path} (branch {branch}).",
+        "recover_pane": "The task was not sent; {location} is still open. Fix the start-up or confirmation problem in that pane before deciding how to send the task.{suffix}",
+        "recover_worktree": "The task was not sent. Recorded worktree path {path}, branch {branch}, state {state}; check what was created before handling that workspace.",
+        "recover_default": "The task was not sent. Fix the error; if creating the pane hit a communication error, check whether Herdr left a pane behind.",
+    },
+}
+
+
+def language(policy: dict | None = None) -> str:
+    """Terminal language: HERDR_ROUTER_LANGUAGE, else the policy's terminal_language, else Chinese."""
+    env = os.environ.get("HERDR_ROUTER_LANGUAGE", "").strip().lower()[:2]
+    if env in TEXT:
+        return env
+    pref = (policy or {}).get("terminal_language")
+    return pref if isinstance(pref, str) and pref in TEXT else "zh"
+
+
+def _labels(lang: str) -> dict:
+    return RENDER_LABELS_EN if lang == "en" else RENDER_LABELS
+
+
+def dimension_label(dim: dict, lang: str = "zh") -> str:
+    label = dim.get("label", dim["id"])
+    builtin = BUILTIN_DIMENSION_LABELS.get(dim["id"])
+    if lang == "en" and builtin and label == builtin[0]:
+        return builtin[1]
+    return label
 
 _BARS = " ▁▂▃▄▅▆▇█"
 
@@ -62,36 +161,38 @@ def _spark(dist: dict, n: int) -> str:
     return "".join(_BARS[min(8, round(float(dist.get(str(i), 0)) * 8))] for i in range(n))
 
 
-def render(d: Decision, policy: dict, top: int = 3, width: int | None = None) -> str:
+def render(d: Decision, policy: dict, top: int = 3, width: int | None = None, lang: str = "zh") -> str:
+    labels = _labels(lang)
     a = d.assessment
     conf = f"{a['source']}, confidence {a['confidence']}"
     if a.get("bumped"):
-        conf += ", " + RENDER_LABELS["low_confidence"]
-    rows = [(RENDER_LABELS["source"], conf)]
+        conf += ", " + labels["low_confidence"]
+    rows = [(labels["source"], conf)]
     for dim in model.dimensions(policy):
         dist = a["dists"].get(dim["id"])
         if not dist:
-            rows.append((dim.get("label", dim["id"]), "—"))
+            rows.append((dimension_label(dim, lang), "—"))
         elif dim["type"] == "score":
             n = len(dim["levels"])
-            rows.append((dim.get("label", dim["id"]),
+            rows.append((dimension_label(dim, lang),
                          f"{a['expected'][dim['id']]} / {n - 1}   [{_spark(dist, n)}]"))
         else:
             best = max(dist, key=dist.get)
-            rows.append((dim.get("label", dim["id"]), f"{best} ({dist[best]:.2f})"))
-    rows.append((RENDER_LABELS["selection"], f"{d.profile_label} [{d.profile_id}]  →  {d.summary}"))
-    rows.append((RENDER_LABELS["reason"], d.reason))
+            rows.append((dimension_label(dim, lang), f"{best} ({dist[best]:.2f})"))
+    rows.append((labels["selection"], f"{d.profile_label} [{d.profile_id}]  →  {d.summary}"))
+    rows.append((labels["reason"], d.reason))
     for i, r in enumerate(d.ranking[:top], 1):
         parts = ", ".join(f"{k}={v}" for k, v in r["breakdown"].items() if v)
         flag = "" if r["available"] else f"  ✗ {r['why_unavailable']}"
         rows.append((f"#{i}", f"{r['profile_id']:<18} {r['total']:<6} ({parts or '0'}){flag}"))
     if err := a.get("details", {}).get("systemone_error"):
-        rows.append((RENDER_LABELS["decision_model"], f"{RENDER_LABELS['keyword_fallback']} ({err[:60]})"))
+        rows.append((labels["decision_model"], f"{labels['keyword_fallback']} ({err[:60]})"))
     native = " ".join(shlex.quote(x) for x in d.args)
-    rows.append((RENDER_LABELS["launch_args"], f"--kind {d.kind}" + (f" -- {native}" if native else "")))
+    rows.append((labels["launch_args"], f"--kind {d.kind}" + (f" -- {native}" if native else "")))
+    col = 11 if lang == "en" else 9  # "Difficulty" is wider than the Chinese labels
     if not width:
-        return "\n".join(f"{_pad(k, 9)}{v}" for k, v in rows)
-    return "\n".join(_wrap(f"{_pad(k, 9)}{v}", width, 9) for k, v in rows)
+        return "\n".join(f"{_pad(k, col)}{v}" for k, v in rows)
+    return "\n".join(_wrap(f"{_pad(k, col)}{v}", width, col) for k, v in rows)
 
 
 def _cells(text: str) -> int:
@@ -132,31 +233,32 @@ def dispatch_settings(policy: dict) -> dict:
     return policy.get("dispatch", {})
 
 
-def dispatch_recovery(e: herdr.HerdrError) -> str:
+def dispatch_recovery(e: herdr.HerdrError, lang: str = "zh") -> str:
+    text = TEXT[lang]
     status = getattr(e, "prompt_status", "not_sent")
     location = f"pane {e.pane_id}" if e.pane_id else "Herdr"
     if e.agent:
-        location += f"（agent {e.agent}）"
+        location += text["agent_suffix"].format(agent=e.agent)
     if status == "confirmed":
-        return f"任务已确认送达，但等待结束失败。请查看 {location}，不要重新派发。"
+        return text["recover_confirmed"].format(location=location)
     if status == "unknown":
-        return f"任务可能已送达。请先查看 {location} 确认执行状态，不要直接重新派发。"
+        return text["recover_unknown"].format(location=location)
     workspace = getattr(e, "workspace", None)
     if e.pane_id:
-        suffix = (f" worktree 已准备好：{workspace['path']}（分支 {workspace['branch']}）。"
+        suffix = (text["recover_ready"].format(path=workspace["path"], branch=workspace["branch"])
                   if workspace and workspace.get("kind") == "worktree" and workspace.get("state") == "ready" else "")
-        return f"任务未发送，{location} 仍保留。请处理该 pane 的启动或确认问题，再决定如何发送任务。{suffix}"
+        return text["recover_pane"].format(location=location, suffix=suffix)
     if workspace and workspace.get("kind") == "worktree":
-        return (f"任务未发送。已记录 worktree 路径 {workspace['path']}、分支 {workspace['branch']}、"
-                f"状态 {workspace['state']}；请先检查创建结果，再处理该工作区。")
-    return "任务未发送。请修正错误；若创建 pane 时发生通信错误，先检查 Herdr 是否已留下 pane。"
+        return text["recover_worktree"].format(path=workspace["path"], branch=workspace["branch"],
+                                               state=workspace["state"])
+    return text["recover_default"]
 
 
-def dispatch_error(e: herdr.HerdrError, d: Decision | None = None) -> dict:
+def dispatch_error(e: herdr.HerdrError, d: Decision | None = None, lang: str = "zh") -> dict:
     out = {"error": {"code": e.code, "message": e.message},
            "dispatch_id": getattr(e, "dispatch_id", None), "stage": getattr(e, "stage", None),
            "status": "failed", "prompt_status": getattr(e, "prompt_status", "not_sent"),
-           "pane_id": e.pane_id, "agent": e.agent, "recovery": dispatch_recovery(e),
+           "pane_id": e.pane_id, "agent": e.agent, "recovery": dispatch_recovery(e, lang),
            "session_id": getattr(e, "session_id", None)}
     if getattr(e, "workspace", None):
         out["workspace"] = e.workspace
@@ -297,7 +399,7 @@ def live_cwd(pane_id: str | None, fallback: str | None) -> str:
     return fallback or os.getcwd()
 
 
-def run_action(action_id: str) -> int:
+def run_action(action_id: str, lang: str = "zh") -> int:
     if action_id == "open-editor":
         from . import web
         url = web.ensure_running()
@@ -306,7 +408,7 @@ def run_action(action_id: str) -> int:
     ctx = plugin_context()
     target = ctx.get("focused_pane_id")
     cwd = live_cwd(target, ctx.get("focused_pane_cwd") or ctx.get("workspace_cwd"))
-    env = {"HERDR_ROUTER_CWD": cwd}
+    env = {"HERDR_ROUTER_CWD": cwd, "HERDR_ROUTER_LANGUAGE": lang}
     if target:
         env["HERDR_ROUTER_TARGET"] = target
     if action_id == "route-selection" and ctx.get("selected_text"):
@@ -350,7 +452,7 @@ def _drain_paste() -> list[str]:
     return lines
 
 
-def _ask_task(prompt: str = "任务> ") -> str:
+def _ask_task(prompt: str = TEXT["zh"]["task_prompt"]) -> str:
     """Like _ask, but a pasted multi-line task stays whole instead of spilling into later prompts."""
     first = _ask(prompt)
     rest = _drain_paste() if sys.stdin.isatty() else []
@@ -379,11 +481,12 @@ def _pick(prompt: str, options: list[str]) -> str | None:
     return None
 
 
-def run_popup(policy: dict) -> int:
+def run_popup(policy: dict, lang: str = "zh") -> int:
+    text = TEXT[lang]
     try:
         dcfg = dispatch_settings(policy)
     except herdr.HerdrError as e:
-        print(f"✗ {e}\n{dispatch_recovery(e)}")
+        print(f"✗ {e}\n{dispatch_recovery(e, lang)}")
         return 1
     try:
         import readline  # noqa: F401  (line editing for input())
@@ -399,11 +502,11 @@ def run_popup(policy: dict) -> int:
             task = p.read_text(encoding="utf-8").strip()
             p.unlink(missing_ok=True)
 
-    print(f"herdr-router  ·  目标 pane {target or '(当前)'}  ·  {cwd}\n")
+    print(text["header"].format(target=target or text["current_pane"], cwd=cwd) + "\n")
     if task:
-        print(f"选中文本作为任务：\n  {task[:300]}{'…' if len(task) > 300 else ''}\n")
+        print(f"{text['selected_task']}\n  {task[:300]}{'…' if len(task) > 300 else ''}\n")
     else:
-        task = _ask_task()
+        task = _ask_task(text["task_prompt"])
     if not task:
         return 0
 
@@ -413,57 +516,57 @@ def run_popup(policy: dict) -> int:
         _clear()
         print(f"herdr-router  ·  {cwd}\n")
         flat = " ".join(task.split())
-        print(_wrap(f"任务  {flat[:240]}{'…' if len(flat) > 240 else ''}", _width(), 6))
+        print(_wrap(f"{text['task']}  {flat[:240]}{'…' if len(flat) > 240 else ''}", _width(), 6))
         try:
             d = route_task(task, policy, cwd=cwd, **pinned)
         except NoAgentAvailable as e:
             print(f"\n✗ {e}")
             d = None
         if d:
-            print("\n" + render(d, policy, width=_width()) + "\n")
-        print(_wrap("Enter 派发 · k 换档位 · m 换模型 · e 换 effort · t 改任务 · q 取消", _width(), 0))
+            print("\n" + render(d, policy, width=_width(), lang=lang) + "\n")
+        print(_wrap(text["keys"], _width(), 0))
         choice = _ask("> ").strip().lower()
         if choice == "q":
             return 0
         if choice == "k":
-            if pid := _pick("档位编号> ", profile_ids):
+            if pid := _pick(text["profile_prompt"], profile_ids):
                 pinned = {"profile": pid}
             continue
         if choice in ("m", "e") and d:
             # Freeze the current pick, then patch only the field being changed.
             pinned = {"profile": d.profile_id, "model_": d.model, "effort": d.effort}
             if choice == "m":
-                pinned["model_"] = _ask("模型名（留空=档位默认）> ").strip() or None
-            elif e := _pick("effort 编号> ", agents.EFFORTS):
+                pinned["model_"] = _ask(text["model_prompt"]).strip() or None
+            elif e := _pick(text["effort_prompt"], agents.EFFORTS):
                 pinned["effort"] = e
             continue
         if choice == "t":
-            task = _ask_task() or task
+            task = _ask_task(text["task_prompt"]) or task
             continue
         if choice == "" and d:
             break
 
     wait_s = int(dcfg.get("agent_start_timeout_ms", 60000)) // 1000
-    print(f"\n正在启动 {d.kind}，最多等 {wait_s} 秒，随后确认任务送达…", flush=True)
+    print("\n" + text["starting"].format(kind=d.kind, seconds=wait_s), flush=True)
     try:
         r = dispatch(d, target_pane=target, cwd=cwd,
                      direction=dcfg.get("direction", "auto"),
                      start_timeout_ms=int(dcfg.get("agent_start_timeout_ms", 60000)), task=task)
-        print(f"\n✓ 任务已确认送达 {r.agent}（pane {r.pane_id}）")
+        print("\n" + text["confirmed"].format(agent=r.agent, pane=r.pane_id))
         print(f"Session: {getattr(r, 'session_id', r.dispatch_id)}")
         if getattr(r, "session_warning", None):
-            print(f"Session 记录未能更新：{r.session_warning}。任务已送达，请查看原 pane。")
+            print(text["session_warning"].format(warning=r.session_warning))
         time.sleep(POPUP_DONE_S)  # the new pane is the result; no need to hold focus here
         return 0
     except Exception as error:
         e = public_dispatch_error(error)
-        print(f"\n✗ 派发失败：{e}")
-        print(dispatch_recovery(e))
+        print("\n" + text["failed"].format(error=e))
+        print(dispatch_recovery(e, lang))
         if e.pane_id:
             screen = herdr.pane_screen(e.pane_id)
-            print(f"\npane {e.pane_id} 现在的画面：")
-            print("  " + (screen.replace("\n", "\n  ") or "(空)"))
-    _ask("\n按回车关闭")  # only on failure: leave the error on screen
+            print("\n" + text["pane_screen"].format(pane=e.pane_id))
+            print("  " + (screen.replace("\n", "\n  ") or text["empty_screen"]))
+    _ask("\n" + text["close"])  # only on failure: leave the error on screen
     return 1
 
 
@@ -530,6 +633,7 @@ def main(argv: list[str] | None = None) -> int:
         return run_session(args)
     policy = model.load(args.policy)
     extend_path(policy)
+    lang = language(policy)
 
     if args.cmd == "ui":
         from . import web
@@ -539,15 +643,15 @@ def main(argv: list[str] | None = None) -> int:
         return web.serve(host="0.0.0.0" if args.lan else args.host, port=args.port,
                          launch=args.open, extra_hosts=set(args.allow_host))
     if args.cmd == "popup":
-        return run_popup(policy)
+        return run_popup(policy, lang)
     if args.cmd == "action":
-        return run_action(args.action_id)
+        return run_action(args.action_id, lang)
 
     if args.cmd == "dispatch" and not args.dry_run:
         try:
             dcfg = dispatch_settings(policy)
         except herdr.HerdrError as e:
-            print(json.dumps(dispatch_error(e), ensure_ascii=False), file=sys.stderr)
+            print(json.dumps(dispatch_error(e, lang=lang), ensure_ascii=False), file=sys.stderr)
             return 1
 
     task = read_task(args.task)
@@ -561,7 +665,7 @@ def main(argv: list[str] | None = None) -> int:
             cwd, handoff, parent_workspace = session_input(args)
             if not args.json and (args.isolation == "worktree" or
                                   (parent_workspace and parent_workspace["kind"] == "worktree")):
-                print(f"正在检查隔离工作区；Git 准备总预算 {args.worktree_timeout} ms…", file=sys.stderr, flush=True)
+                print(TEXT[lang]["worktree_check"].format(ms=args.worktree_timeout), file=sys.stderr, flush=True)
             workspace_plan = workspaces.inspect(cwd, isolation=args.isolation,
                                                  parent_workspace=parent_workspace,
                                                  timeout_ms=args.worktree_timeout)
@@ -569,7 +673,7 @@ def main(argv: list[str] | None = None) -> int:
             failure = herdr.HerdrError(e.code, e.message)
             failure.stage = "session_input"
             failure.workspace = getattr(e, "workspace", None)
-            print(json.dumps(dispatch_error(failure), ensure_ascii=False), file=sys.stderr)
+            print(json.dumps(dispatch_error(failure, lang=lang), ensure_ascii=False), file=sys.stderr)
             return 1
     use_backend = not args.no_systemone
 
@@ -585,7 +689,7 @@ def main(argv: list[str] | None = None) -> int:
     except NoAgentAvailable as e:
         failure = herdr.HerdrError("no_agent_available", str(e))
         failure.stage, failure.prompt_status = "route", "not_sent"
-        payload = dispatch_error(failure) if args.cmd == "dispatch" else {
+        payload = dispatch_error(failure, lang=lang) if args.cmd == "dispatch" else {
             "error": {"code": failure.code, "message": failure.message}}
         print(json.dumps(payload, ensure_ascii=False), file=sys.stderr)
         return 1
@@ -596,7 +700,7 @@ def main(argv: list[str] | None = None) -> int:
         except sessions.SessionError as e:
             failure = herdr.HerdrError(e.code, e.message)
             failure.stage = "session_input"
-            print(json.dumps(dispatch_error(failure, d), ensure_ascii=False), file=sys.stderr)
+            print(json.dumps(dispatch_error(failure, d, lang), ensure_ascii=False), file=sys.stderr)
             return 1
 
     if args.cmd in ("route", "explain") or args.dry_run:
@@ -609,24 +713,24 @@ def main(argv: list[str] | None = None) -> int:
         if args.json:
             print(json.dumps(preview, ensure_ascii=False))
         else:
-            print(render(d, policy))
+            print(render(d, policy, lang=lang))
             if args.cmd == "dispatch":
                 print(f"\nWorkspace: {workspace_plan['mode']} · {cwd}")
                 if workspace_plan["mode"] == "create":
-                    print(f"Git 准备预算 {args.worktree_timeout} ms；路径与分支将在实际派发时分配。")
+                    print(TEXT[lang]["worktree_budget"].format(ms=args.worktree_timeout))
         return 0
 
     # dispatch
     if not herdr.inside_herdr():
         failure = herdr.HerdrError("not_in_herdr", "run inside a Herdr pane")
         failure.stage, failure.prompt_status = "validate", "not_sent"
-        print(json.dumps(dispatch_error(failure, d), ensure_ascii=False), file=sys.stderr)
+        print(json.dumps(dispatch_error(failure, d, lang), ensure_ascii=False), file=sys.stderr)
         return 1
     wait_s = int(dcfg.get("agent_start_timeout_ms", 60000)) // 1000
     if not args.json:
         if workspace_plan["mode"] == "create":
-            print("将创建按需 worktree，再启动 agent…", file=sys.stderr, flush=True)
-        print(f"\n正在启动 {d.kind}，最多等 {wait_s} 秒，随后确认任务送达…", file=sys.stderr, flush=True)
+            print(TEXT[lang]["worktree_create"], file=sys.stderr, flush=True)
+        print("\n" + TEXT[lang]["starting"].format(kind=d.kind, seconds=wait_s), file=sys.stderr, flush=True)
     try:
         r = dispatch(d, target_pane=args.pane, cwd=cwd, name=args.name,
                      direction=args.direction or dcfg.get("direction", "auto"),
@@ -637,7 +741,7 @@ def main(argv: list[str] | None = None) -> int:
                      worktree_timeout_ms=args.worktree_timeout)
     except Exception as error:
         e = public_dispatch_error(error)
-        print(json.dumps(dispatch_error(e, d), ensure_ascii=False), file=sys.stderr)
+        print(json.dumps(dispatch_error(e, d, lang), ensure_ascii=False), file=sys.stderr)
         return 1
     out = {"agent": r.agent, "pane_id": r.pane_id, "decision": d.to_dict(),
            "dispatch_id": r.dispatch_id, "stage": r.stage,
@@ -650,13 +754,14 @@ def main(argv: list[str] | None = None) -> int:
     if args.json:
         print(json.dumps(out, ensure_ascii=False))
     else:
-        print(render(d, policy) + f"\n\n✓ 任务已确认送达 {r.agent}（pane {r.pane_id}）")
+        print(render(d, policy, lang=lang) + "\n\n" + TEXT[lang]["confirmed"].format(agent=r.agent, pane=r.pane_id))
         print(f"Session: {out['session_id']}")
         if out["workspace"]["kind"] == "worktree":
             w = out["workspace"]
-            print(f"Worktree: {w['cwd']}\nBranch: {w['branch']} · 创建 {w['creation_ms']} ms")
+            print(f"Worktree: {w['cwd']}\nBranch: {w['branch']} · "
+                  + TEXT[lang]["worktree_created"].format(ms=w["creation_ms"]))
         if out.get("session_warning"):
-            print(f"Session 记录未能更新：{out['session_warning']}。任务已送达，请查看原 pane。", file=sys.stderr)
+            print(TEXT[lang]["session_warning"].format(warning=out["session_warning"]), file=sys.stderr)
     return 0
 
 

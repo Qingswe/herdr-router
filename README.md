@@ -10,13 +10,12 @@ high effort spends quota on a one-line rename, and a small model fails at a
 design problem. herdr-router makes that choice from a policy you can see and
 edit, and explains each decision.
 
-https://github.com/user-attachments/assets/de887ed9-605b-4101-898b-51051ace720a
+https://github.com/user-attachments/assets/a3fac404-4d1f-4d71-b9cc-b34376324952
 
-*A 32-second recording ([MP4](docs/media/herdr-router-demo.mp4)): the Herdr
-prefix (Ctrl+B by default), then d, opens the router. It routes a review task
-to Codex with GPT-6.1 Sol at medium effort, and Codex starts in a new pane.
-Waiting time is shortened, and the local path in the popup header is hidden.
-The popup's labels are in Chinese.*
+*16-second demo ([MP4](docs/media/herdr-router-demo.mp4)): Ctrl+B, then d opens
+the router. Enter a task, see the recommended agent, model and effort, then
+press Enter to start Codex in a new pane. The interface is in English; typing
+and waiting are sped up, with the popup's local path hidden.*
 
 ![Routing map: profile dots placed by difficulty and duration, with the background shaded by the profile that wins each area](docs/images/routing-map-en.png)
 
@@ -61,8 +60,8 @@ which profile a task at that difficulty and duration would go to.*
   handoff file, and `--isolation worktree` runs a task on its own Git branch and
   working tree.
 - **Small footprint.** Python standard library only, no frontend build. The
-  editor runs locally in English or Chinese, needs a token, and cannot dispatch
-  agents.
+  terminal output and the local editor are available in English or Chinese.
+  The editor needs a token and cannot dispatch agents.
 
 The bundled policy is derived from [Artificial Analysis](https://artificialanalysis.ai/)
 benchmark, price, and time data; the [guide](docs/guide.md#the-default-policy)
@@ -111,7 +110,9 @@ herdr-router route "rename one variable" --no-systemone
 ```
 
 It prints the estimate for each dimension, the chosen profile, and the top
-three with their penalties. Terminal labels are currently in Chinese.
+three with their penalties. Terminal output is in Chinese by default. For
+English, add `"terminal_language": "en"` to your policy (it also applies to
+the popup), or set `HERDR_ROUTER_LANGUAGE=en` for a single command.
 
 From inside a Herdr pane, dispatch it for real:
 

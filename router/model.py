@@ -243,6 +243,8 @@ def validate(policy: dict, kinds: list[str] | None = None) -> list[dict]:
     for key in ("under_penalty", "over_penalty", "cost_weight", "time_weight", "min_confidence", "tolerance"):
         if key in sc and (not _is_num(sc[key]) or sc[key] < 0):
             err(f"scoring.{key}", "must be a number >= 0")
+    if policy.get("terminal_language", "zh") not in ("zh", "en"):
+        err("terminal_language", "terminal_language must be 'zh' or 'en'")
     be = policy.get("backend", {})
     if be.get("enabled") and not str(be.get("base_url", "")).startswith(("http://", "https://")):
         err("backend.base_url", "base_url must be an http(s) URL")

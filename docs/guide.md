@@ -128,6 +128,18 @@ herdr-router dispatch - < task.md                   # read the task from stdin
 Other `dispatch` options: `--cwd`, `--name` (agent name), `--pane` (pane to
 split), `--direction auto|right|down`, `--wait`, `--timeout <ms>`.
 
+Terminal output from `route`, `dispatch`, and the popup is in Chinese by
+default. Set the top-level policy field `"terminal_language": "en"` (in the
+editor's JSON tab or `policy.json`) to switch it to English, or `"zh"` to keep
+Chinese. `HERDR_ROUTER_LANGUAGE=en` or `zh` overrides the policy for one
+process. Plugin actions run in the Herdr server's environment, so for the
+shortcut popup use the policy field; the action passes the resolved language on
+to the popup. In English, the four shipped dimensions are shown as Difficulty,
+Duration, Scope, and Type only while their labels are still the shipped Chinese
+ones; labels you changed and profile labels are shown as stored. In `--json`
+output only the `recovery` message follows the language. The setting does not
+affect routing.
+
 Every dispatch is appended to
 `~/.local/state/herdr/plugins/herdr-router/decisions.jsonl`. The editor plots
 these entries on the routing map.
